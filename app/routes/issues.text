@@ -1,0 +1,221 @@
+from typing import Optional, List
+from fastapi import APIRouter, Depends, Query
+from beanie import PydanticObjectId
+
+from app.models.user import User
+from app.models.issue_analysis import IssueAnalysis
+from app.models.uploaded_file import UploadedFile
+from app.models.issue_mapping import IssueMapping
+from app.middleware.auth import get_admin_or_super
+from app.utils.column_mapping import ISSUE_COLUMN_RANGE_MAPPING, get_question_text_for_column
+
+router = APIRouter(prefix="/issues", tags=["Issues Analysis"])
+
+
+@router.get("")
+async def list_issues(_: User = Depends(get_admin_or_super)):
+    """Return the 33 issue definitions with column ranges."""
+    issues = await IssueMapping.find_all().sort("+display_order").to_list()
+    if not issues:
+        # Return from static mapping if DB not seeded
+        return {
+            "data": [
+                {
+                    "issue_name": name,
+                    "column_range": info,
+                    "display_order": idx,
+                }
+                for idx, (name, info) in enumerate(ISSUE_COLUMN_RANGE_MAPPING.items())
+            ]
+        }
+    return {
+        "data": [
+            {
+                "id": str(i.id),
+                "issue_name": i.issue_name,
+                "column_range": i.column_range.model_dump() if i.column_range else {},
+                "follow_ups": [
+                    {
+                        "column_letter": f.column_letter,
+                        "question_text": get_question_text_for_column(f.column_letter) if (not f.question_text or f.question_text.startswith("Column ")) else f.question_text,
+                        "display_order": f.display_order,
+                    }
+                    for f in i.follow_ups
+                ],
+                "display_order": i.display_order,
+            }
+            for i in issues
+        ]
+    }
+
+
+@router.get("/analysis")
+async def get_issue_analysis(
+    file_id: Optional[str] = None,
+    region_id: Optional[str] = None,
+    country_id: Optional[str] = None,
+    ib_version_id: Optional[str] = None,
+    issue_name: Optional[str] = None,
+    _: User = Depends(get_admin_or_super),
+):
+    """
+    Get pre-computed issue analysis for the given filters.
+    Merges analysis from multiple files if needed.
+    """
+    file_ids = []
+    if file_id:
+        file_ids = [PydanticObjectId(file_id)]
+    elif region_id or country_id or ib_version_id:
+        file_query = {"status": "completed"}
+        if region_id:
+            file_query["region_id"] = PydanticObjectId(region_id)
+        if country_id:
+            file_query["country_id"] = PydanticObjectId(country_id)
+        if ib_version_id:
+            file_query["ib_version_id"] = PydanticObjectId(ib_version_id)
+        files = await UploadedFile.find(file_query).to_list()
+        file_ids = [f.id for f in files]
+
+    query = {}
+    if file_ids:
+        query["file_id"] = {"$in": file_ids}
+
+    analyses = await IssueAnalysis.find(query).to_list()
+    if not analyses:
+        return {"data": [], "summary": {}, "message": "No analysis data found"}
+
+    # Merge multiple analyses
+    merged: dict = {}
+    total_records = 0
+
+    for analysis in analyses:
+        for issue in analysis.issues:
+            iname = issue.issue_name
+            if issue_name and iname.lower() != issue_name.lower():
+                continue
+            if iname not in merged:
+                merged[iname] = {
+                    "issue_name": iname,
+                    "total_complaints": 0,
+                    "follow_ups": {},
+                }
+            merged[iname]["total_complaints"] += issue.total_complaints
+
+            for fu in issue.follow_ups:
+                col = fu.column_letter
+                q = fu.question_text
+                # Resolve actual question text if it's missing or generic
+                if not q or q.startswith("Column ") and col:
+                    q = get_question_text_for_column(col)
+                if not q:
+                    q = f"Column {col}"
+
+                key = col if col else q
+                if key not in merged[iname]["follow_ups"]:
+                    merged[iname]["follow_ups"][key] = {
+                        "question_text": q,
+                        "column_letter": col,
+                        "answers": {},
+                        "total_responses": 0,
+                    }
+                for ans in fu.answers:
+                    v = ans.value
+                    if v not in merged[iname]["follow_ups"][key]["answers"]:
+                        merged[iname]["follow_ups"][key]["answers"][v] = 0
+                    merged[iname]["follow_ups"][key]["answers"][v] += ans.count
+                    merged[iname]["follow_ups"][key]["total_responses"] += ans.count
+
+    # Convert to output format
+    total_complaints = sum(v["total_complaints"] for v in merged.values())
+    result = []
+    for iname, data in sorted(merged.items(), key=lambda x: -x[1]["total_complaints"]):
+        follow_ups_out = []
+        for key, fu_data in data["follow_ups"].items():
+            total_fu = fu_data["total_responses"] or 1
+            answers_out = sorted(
+                [
+                    {
+                        "value": v,
+                        "count": c,
+                        "percentage": round(c / total_fu * 100, 2),
+                    }
+                    for v, c in fu_data["answers"].items()
+                ],
+                key=lambda x: -x["count"],
+            )
+            follow_ups_out.append({
+                "question_text": fu_data["question_text"],
+                "column_letter": fu_data["column_letter"],
+                "answers": answers_out,
+                "total_responses": fu_data["total_responses"],
+            })
+        result.append({
+            "issue_name": iname,
+            "total_complaints": data["total_complaints"],
+            "percentage": round(data["total_complaints"] / total_complaints * 100, 2)
+            if total_complaints else 0,
+            "follow_ups": follow_ups_out,
+        })
+
+    return {
+        "data": result,
+        "summary": {
+            "total_issues_reported": total_complaints,
+            "unique_issues": len(result),
+            "most_common_issue": result[0]["issue_name"] if result else None,
+            "least_common_issue": result[-1]["issue_name"] if result else None,
+        },
+    }
+
+
+@router.get("/top")
+async def get_top_issues(
+    limit: int = Query(10, ge=1, le=33),
+    file_id: Optional[str] = None,
+    _: User = Depends(get_admin_or_super),
+):
+    query = {}
+    if file_id:
+        query["file_id"] = PydanticObjectId(file_id)
+    analyses = await IssueAnalysis.find(query).to_list()
+
+    counts: dict = {}
+    for analysis in analyses:
+        for issue in analysis.issues:
+            counts[issue.issue_name] = counts.get(issue.issue_name, 0) + issue.total_complaints
+
+    top = sorted(counts.items(), key=lambda x: -x[1])[:limit]
+    return {
+        "data": [{"issue_name": n, "count": c} for n, c in top]
+    }
+
+
+@router.get("/trend")
+async def get_issue_trend(
+    file_id: Optional[str] = None,
+    _: User = Depends(get_admin_or_super),
+):
+    """Return monthly trend data for top 5 issues."""
+    from app.models.survey_response import SurveyResponse
+
+    query = {}
+    if file_id:
+        query["file_id"] = PydanticObjectId(file_id)
+
+    pipeline = [
+        {"$match": query},
+        {"$unwind": "$complaint_groups"},
+        {
+            "$group": {
+                "_id": {
+                    "issue": "$complaint_groups",
+                    "year": {"$year": "$survey_date"},
+                    "month": {"$month": "$survey_date"},
+                },
+                "count": {"$sum": 1},
+            }
+        },
+        {"$sort": {"_id.year": 1, "_id.month": 1}},
+    ]
+    results = await SurveyResponse.aggregate(pipeline).to_list()
+    return {"data": results}

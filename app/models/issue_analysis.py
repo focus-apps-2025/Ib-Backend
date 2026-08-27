@@ -1,0 +1,64 @@
+from beanie import Document, PydanticObjectId
+from pydantic import BaseModel, Field
+from typing import List, Optional, Dict, Any
+from datetime import datetime
+from pymongo import IndexModel, ASCENDING, DESCENDING
+
+
+class AnswerCount(BaseModel):
+    value: str
+    count: int = 0
+    percentage: float = 0.0
+
+
+class SubColumnSummary(BaseModel):
+    """A specific sub-column like 'Yes-Is vehicle fall down?'"""
+    column_letter: str
+    question_text: str
+    total_responses: int = 0
+    answers: List[AnswerCount] = Field(default_factory=list)
+
+
+class SubIssueSummary(BaseModel):
+    """A sub-issue group like 'Handle bar bend'"""
+    name: str
+    total_responses: int = 0
+    columns: List[str] = Field(default_factory=list)
+    sub_columns: List[SubColumnSummary] = Field(default_factory=list)
+
+
+class IssueSummary(BaseModel):
+    issue_name: str
+    total_complaints: int = 0
+    percentage: float = 0.0
+    sub_issues: List[SubIssueSummary] = Field(default_factory=list)
+
+
+class AnalysisSummary(BaseModel):
+    total_issues_reported: int = 0
+    unique_issues: int = 0
+    most_common_issue: Optional[str] = None
+    least_common_issue: Optional[str] = None
+    issues_per_record: float = 0.0
+
+
+class IssueAnalysis(Document):
+    file_id: PydanticObjectId
+    region_id: Optional[PydanticObjectId] = None
+    country_id: Optional[PydanticObjectId] = None
+    ib_version_id: Optional[PydanticObjectId] = None
+    issues: List[IssueSummary] = Field(default_factory=list)
+    summary: Optional[AnalysisSummary] = None
+    generated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    class Settings:
+        name = "issue_analysis"
+        indexes = [
+            IndexModel([("file_id", ASCENDING)]),
+            IndexModel([("region_id", ASCENDING)]),
+            IndexModel([("country_id", ASCENDING)]),
+            IndexModel([("ib_version_id", ASCENDING)]),
+            IndexModel([("generated_at", DESCENDING)]),
+        ]
