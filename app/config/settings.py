@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     # Server
     HOST: str = "0.0.0.0"
     PORT: int = 8000
-    ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
+    ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:3000,https://ib-backend-uao1.onrender.com,https://ib.focusengineeringapp.com"
 
     # MongoDB
     MONGODB_URL: str = "mongodb://localhost:27017"
