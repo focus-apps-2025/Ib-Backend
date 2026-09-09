@@ -21,6 +21,16 @@ class SurveyResponse(Document):
     mode_of_purchase: Optional[str] = None
     ownership: Optional[str] = None
     nps_score: Optional[float] = None
+    
+    # ─── New NPS fields ─────────────────────────────────────────
+    recommend_vehicle: Optional[str] = None
+    recommend_score: Optional[float] = None
+    recommend_category: Optional[str] = None
+    duration_of_usage: Optional[str] = None
+
+    # ─── Service Frequency fields (Column BP & BQ) ─────────────
+    service_freq_time: Optional[str] = None
+    service_freq_kms: Optional[str] = None
 
     # ─── All 422 columns stored as document ─────────────────────
     full_data: Dict[str, Any] = Field(default_factory=dict)

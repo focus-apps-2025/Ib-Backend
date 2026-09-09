@@ -4,7 +4,7 @@ from typing import List
 
 class Settings(BaseSettings):
     # App
-    APP_NAME: str = "Vehicle Complaint Analysis Platform"
+    APP_NAME: str = "VQS - Vehicle Quality Survey Platform"
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = True
     ENVIRONMENT: str = "development"
@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     # Email
     MAIL_USERNAME: str = ""
     MAIL_PASSWORD: str = ""
-    MAIL_FROM: str = "noreply@vehicleiq.com"
+    MAIL_FROM: str = "noreply@vqs.com"
     MAIL_PORT: int = 587
     MAIL_SERVER: str = "smtp.gmail.com"
     MAIL_TLS: bool = True
@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     CHUNK_SIZE: int = 1000
 
     # Super Admin
-    SUPER_ADMIN_EMAIL: str = "superadmin@vehicleiq.com"
+    SUPER_ADMIN_EMAIL: str = "superadmin@vqs.com"
     SUPER_ADMIN_USERNAME: str = "superadmin"
     SUPER_ADMIN_PASSWORD: str = "SuperAdmin@123"
     SUPER_ADMIN_FULLNAME: str = "Super Administrator"

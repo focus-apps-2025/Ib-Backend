@@ -121,22 +121,56 @@ def parse_number(val: Any) -> Optional[float]:
     return None
 
 
-def is_junk_value(val: str) -> bool:
+def is_junk_value(val: Any) -> bool:
     """
-    Detect junk / placeholder values that should be excluded from analysis.
-    Examples: "Submit Form....", "-----", "....", "12", "AB", etc.
+    Detect junk, placeholder, rating scale, or numeric values that should be excluded from issue analysis.
+    Examples to skip: "Submit Form....", "-----", "....", "12", "7.0", "1.0", "2.0", "6.0", "Average", "Best", "Good", "Poor", etc.
     """
+    if val is None:
+        return True
+    
+    s = str(val).strip()
+    if not s:
+        return True
+    
+    s_lower = s.lower()
+    
+    # 1. Skip blanks, nulls, placeholders
+    if s_lower in (
+        "blank", "nil", "none", "n/a", "na", "null", "nan", "nat", "undefined",
+        "-", "--", "---", "----", ".", "..", "...", "....", "----"
+    ):
+        return True
+
+    # 2. Skip numeric values (floats like 7.0, 6.0, 1.0, 2.0, 10.0 or integers like 12)
+    try:
+        float(s)
+        return True
+    except ValueError:
+        pass
+
+    # 3. Skip rating / scale / generic opinion words
+    junk_words = {
+        "average", "avg", "best", "good", "very good", "poor", "very poor",
+        "fair", "excellent", "satisfied", "unsatisfied", "dissatisfied",
+        "very satisfied", "neutral", "medium", "high", "low", "ok", "okay",
+        "normal", "strongly agree", "agree", "disagree", "strongly disagree"
+    }
+    if s_lower in junk_words:
+        return True
+
+    # 4. Regex patterns for submit form, single/double letters, dots/dashes
     patterns = [
         r"^Submit\s?Form",
         r"^Submit$",
         r"^\.+$",
         r"^[-_]+$",
         r"^[A-Za-z]{1,2}$",
-        r"^[0-9]+$",
+        r"^\d+(\.\d+)?$",
         r"^[A-Z]{1,3}\.?$",
         r"^\s*$",
     ]
-    return any(re.match(p, val.strip(), re.IGNORECASE) for p in patterns)
+    return any(re.match(p, s, re.IGNORECASE) for p in patterns)
 
 
 async def extract_row_data(row: pd.Series, col_letters: List[str]) -> Dict[str, Any]:
@@ -165,7 +199,30 @@ async def extract_row_data(row: pd.Series, col_letters: List[str]) -> Dict[str, 
         "mode_of_purchase": safe_str(row.get("I")) if row.get("I") is not None else None,
         "ownership": safe_str(row.get("Q")) if row.get("Q") is not None else None,
         "nps_score": parse_number(row.get(NPS_COLUMN)),
+        
+        # ─── New NPS Extraction ─────────────────────────────────────────
+        "recommend_vehicle": safe_str(row.get("W")) if row.get("W") is not None else None,
+        "duration_of_usage": safe_str(row.get("T")) if row.get("T") is not None else None,
+
+        # ─── Service Frequency Extraction ──────────────────────────────
+        "service_freq_time": safe_str(row.get("BP")) if row.get("BP") is not None else None,
+        "service_freq_kms": safe_str(row.get("BQ")) if row.get("BQ") is not None else None,
     }
+    
+    # Calculate recommend category from column X directly as string
+    raw_cat = safe_str(row.get("X"))
+    cat = None
+    if raw_cat:
+        val = raw_cat.lower()
+        if "yes" in val:
+            cat = "Yes"
+        elif "may be" in val or "maybe" in val:
+            cat = "Maybe"
+        elif "no" in val:
+            cat = "No"
+            
+    key_fields["recommend_category"] = cat
+    key_fields["recommend_score"] = parse_number(row.get("X"))
 
     # ============================================================
     # NEW: Complaint groups extracted from DB to EI

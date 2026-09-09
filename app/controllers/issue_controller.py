@@ -120,6 +120,8 @@ class IssueController:
 
         issue_mapping = await get_issue_column_range_mapping()
 
+        from app.services.excel_processor import is_junk_value
+
         def clean_brand_name(brand_model: str) -> str:
             if not brand_model:
                 return "Unknown"
@@ -128,14 +130,15 @@ class IssueController:
         def is_valid_complaint(value: str) -> bool:
             if not value:
                 return False
-            val_lower = str(value).strip().lower()
-            return val_lower not in ("", "blank", "nil", "none", "n/a")
+            return not is_junk_value(value)
 
         # Count total complaints per issue
         total_complaints_by_issue = {}
         for r in responses:
             complaint_groups = r.complaint_groups or []
             for iname in complaint_groups:
+                if is_junk_value(iname):
+                    continue
                 if issue_name and iname.lower() != issue_name.lower():
                     continue
                 total_complaints_by_issue[iname] = total_complaints_by_issue.get(iname, 0) + 1

@@ -100,10 +100,10 @@ KEY_COLUMNS = {
 # NPS column
 NPS_COLUMN = "AA"
 
-# Complaint group columns (L2)
-COMPLAINT_GROUP_START = "DB"
+# Complaint group columns (L2) - DF to EI (DB-DE were rating columns: Best, Bad, Average)
+COMPLAINT_GROUP_START = "DF"
 COMPLAINT_GROUP_END = "EI"
-COMPLAINT_GROUP_START_IDX = col_letter_to_index("DB")
+COMPLAINT_GROUP_START_IDX = col_letter_to_index("DF")
 COMPLAINT_GROUP_END_IDX = col_letter_to_index("EI")
 
 TOTAL_EXPECTED_COLUMNS = 447
