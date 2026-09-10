@@ -2146,12 +2146,239 @@ async def dashboard_analytics(
         "chart": prof_chart
     }
 
+    # ── 6. Location & Model wise Sample Sizes (Col D, E, T) ───────
+    sample_size_pipeline = [
+        {"$match": query},
+        {
+            "$project": {
+                "city": {"$trim": {"input": {"$ifNull": ["$survey_location", {"$ifNull": ["$full_data.D", ""]}]}}},
+                "brand_raw": {"$trim": {"input": {"$ifNull": ["$brand_model", {"$ifNull": ["$full_data.E", ""]}]}}},
+                "tenure_raw": {"$trim": {"input": {"$ifNull": ["$duration_of_usage", {"$ifNull": ["$full_data.T", ""]}]}}}
+            }
+        },
+        {"$match": {"city": {"$ne": ""}}}
+    ]
+
+    sample_size_docs = await SurveyResponse.aggregate(sample_size_pipeline).to_list(length=10000)
+
+    # Extraction Logic for Column T: extract string before '('
+    def clean_tenure(val):
+        if not val:
+            return "3-6 months"
+        s = str(val).strip()
+        if "(" in s:
+            s = s.split("(")[0].strip()
+        return s if s else "3-6 months"
+
+    # Extraction Logic for Column E: Brand / Model
+    def norm_brand_group(b_raw):
+        if not b_raw:
+            return "TVS HLX125"
+        b_str = str(b_raw).strip()
+        b_upper = b_str.upper()
+        if "BAJAJ" in b_upper:
+            return "Bajaj BM 125 / Bajaj CT 125"
+        if "TVS" in b_upper:
+            return "TVS HLX125"
+        return b_str
+
+    ss_counts = defaultdict(lambda: defaultdict(lambda: defaultdict(int)))
+    ss_cities_set = set()
+    ss_brands_set = set()
+    ss_tenures_set = set()
+
+    for doc in sample_size_docs:
+        c_name = doc.get("city", "").strip()
+        if not c_name:
+            continue
+        b_grp = norm_brand_group(doc.get("brand_raw"))
+        t_clean = clean_tenure(doc.get("tenure_raw"))
+
+        ss_cities_set.add(c_name)
+        ss_brands_set.add(b_grp)
+        ss_tenures_set.add(t_clean)
+        ss_counts[c_name][b_grp][t_clean] += 1
+
+    sample_cities = sorted(list(ss_cities_set)) if ss_cities_set else ["Freetown", "Bo", "Kenema", "Makeni"]
+    sample_brands = ["TVS HLX125", "Bajaj BM 125 / Bajaj CT 125"] if set(["TVS HLX125", "Bajaj BM 125 / Bajaj CT 125"]).issubset(ss_brands_set) else (sorted(list(ss_brands_set)) if ss_brands_set else ["TVS HLX125", "Bajaj BM 125 / Bajaj CT 125"])
+    
+    # Sort tenures e.g. 3-6 months, 6-12 months
+    def tenure_sort_key(t):
+        if "3" in t:
+            return 1
+        if "6" in t:
+            return 2
+        return 3
+
+    sample_tenures = sorted(list(ss_tenures_set), key=tenure_sort_key) if ss_tenures_set else ["3-6 months", "6-12 months"]
+
+    sample_table = []
+    brand_tenure_totals = defaultdict(lambda: defaultdict(int))
+    brand_totals_overall = defaultdict(int)
+    total_grand = 0
+
+    for c_name in sample_cities:
+        row = {"city": c_name}
+        row_grand = 0
+        for b in sample_brands:
+            b_tot = 0
+            for t in sample_tenures:
+                cnt = ss_counts[c_name][b][t]
+                row[f"{b}_{t}"] = cnt
+                brand_tenure_totals[b][t] += cnt
+                b_tot += cnt
+            row[f"{b}_total"] = b_tot
+            brand_totals_overall[b] += b_tot
+            row_grand += b_tot
+
+        row["grand_total"] = row_grand
+        sample_table.append(row)
+        total_grand += row_grand
+
+    # Grand Total row
+    ss_grand_row = {"city": "Grand Total"}
+    for b in sample_brands:
+        b_tot = 0
+        for t in sample_tenures:
+            t_tot = brand_tenure_totals[b][t]
+            ss_grand_row[f"{b}_{t}"] = t_tot
+            b_tot += t_tot
+        ss_grand_row[f"{b}_total"] = b_tot
+    ss_grand_row["grand_total"] = total_grand
+    sample_table.append(ss_grand_row)
+
+    sample_size_data = {
+        "cities": sample_cities,
+        "brands": sample_brands,
+        "tenures": sample_tenures,
+        "table": sample_table,
+    }
+
+    # ── 7. Vehicle Usage Purpose (Column R) ────────────────────────
+    usage_pipeline = [
+        {"$match": query},
+        {
+            "$project": {
+                "brand": {"$ifNull": ["$brand_model", "Unknown"]},
+                "raw_usage": {
+                    "$trim": {
+                        "input": {
+                            "$ifNull": [
+                                "$full_data.R",
+                                {"$ifNull": ["$full_data.r", {"$ifNull": ["$purpose_of_usage", ""]}]}
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        {"$match": {"brand": {"$in": BRANDS}, "raw_usage": {"$ne": ""}}},
+        {
+            "$group": {
+                "_id": {"brand": "$brand", "usage": "$raw_usage"},
+                "count": {"$sum": 1}
+            }
+        }
+    ]
+
+    usage_results = await SurveyResponse.aggregate(usage_pipeline).to_list(length=1000)
+
+    def normalize_usage(val):
+        if not val:
+            return "Others"
+        v = str(val).strip()
+        vl = v.lower()
+        if "taxi" in vl or "commercial" in vl or "passenger" in vl or "okada" in vl:
+            return "Commercial / Taxi"
+        if "personal" in vl or "private" in vl or "family" in vl:
+            return "Personal Transport"
+        if "business" in vl or "work" in vl or "office" in vl:
+            return "Business"
+        if "delivery" in vl or "goods" in vl or "cargo" in vl:
+            return "Goods Delivery"
+        if "rental" in vl or "lease" in vl:
+            return "Rental / Lease"
+        return v.title()
+
+    usage_counts = {b: defaultdict(int) for b in BRANDS}
+    usage_totals_overall = defaultdict(int)
+    usage_brand_totals = {b: 0 for b in BRANDS}
+
+    for r in usage_results:
+        b = r["_id"]["brand"]
+        raw = r["_id"]["usage"]
+        cnt = r["count"]
+
+        if b in BRANDS and raw:
+            norm = normalize_usage(raw)
+            usage_counts[b][norm] += cnt
+            usage_totals_overall[norm] += cnt
+            usage_brand_totals[b] += cnt
+
+    sorted_usages = sorted(usage_totals_overall.items(), key=lambda x: -x[1])
+    top_usages = [u for u, _ in sorted_usages[:5]]
+    usage_categories = top_usages if top_usages else ["Commercial / Taxi", "Personal Transport", "Business", "Others"]
+    if "Others" not in usage_categories and len(sorted_usages) > 5:
+        usage_categories.append("Others")
+
+    final_usage_counts = {b: {u: 0 for u in usage_categories} for b in BRANDS}
+    for b in BRANDS:
+        for u, cnt in usage_counts[b].items():
+            if u in usage_categories:
+                final_usage_counts[b][u] += cnt
+            else:
+                if "Others" in usage_categories:
+                    final_usage_counts[b]["Others"] += cnt
+
+    usage_table = []
+    usage_chart = []
+    usage_grand_total_overall = sum(usage_brand_totals[b] for b in BRANDS)
+
+    for cat in usage_categories:
+        row = {"category": cat}
+        for b in BRANDS:
+            cnt = final_usage_counts[b][cat]
+            total = usage_brand_totals[b]
+            pct = round((cnt / total * 100), 1) if total else 0
+            row[b] = cnt
+            row[f"{b}_pct"] = pct
+            row[f"{b}_count"] = cnt
+        cat_total_cnt = sum(final_usage_counts[b][cat] for b in BRANDS)
+        row["total"] = round((cat_total_cnt / usage_grand_total_overall * 100), 1) if usage_grand_total_overall else 0
+        usage_table.append(row)
+
+        chart_row = {"category": cat}
+        for b in BRANDS:
+            cnt = final_usage_counts[b][cat]
+            total = usage_brand_totals[b]
+            chart_row[f"{b}_count"] = cnt
+            chart_row[f"{b}_pct"] = round((cnt / total * 100), 1) if total else 0
+        usage_chart.append(chart_row)
+
+    usage_grand = {"category": "Grand Total"}
+    for b in BRANDS:
+        usage_grand[b] = 100.0
+        usage_grand[f"{b}_pct"] = 100.0
+        usage_grand[f"{b}_count"] = usage_brand_totals[b]
+    usage_grand["total"] = 100.0
+    usage_table.append(usage_grand)
+
+    vehicle_usage_data = {
+        "categories": usage_categories,
+        "category_header": "Vehicle usage",
+        "brands": BRANDS,
+        "table": usage_table,
+        "chart": usage_chart
+    }
+
     return {
         "age_group": age_group_data,
         "age_city": age_city_data,
         "mode_of_purchase": mode_of_purchase_data,
         "ownership": ownership_data,
         "profession": profession_data,
+        "location_model_sample_size": sample_size_data,
+        "vehicle_usage": vehicle_usage_data,
     }
 
 
