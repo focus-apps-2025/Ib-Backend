@@ -19,20 +19,29 @@ jobs:
           script: |
             set -e
 
+            echo "================================"
             echo "Starting deployment..."
+            echo "================================"
 
             cd /var/www/ib-backend
 
             echo "Pulling latest code..."
             git pull origin main
 
-            echo "Activating virtual environment..."
-            source venv/bin/activate
-
             echo "Installing dependencies..."
-            pip install -r requirements.txt
+            /var/www/ib-backend/venv/bin/pip install -r requirements.txt
 
             echo "Restarting backend..."
             pm2 restart ib-backend
 
-            echo "Deployment completed successfully!"
+            echo "Waiting for backend..."
+            sleep 5
+
+            echo "Checking API health..."
+            curl --fail --silent --show-error \
+              http://127.0.0.1:8000/api/health
+
+            echo ""
+            echo "================================"
+            echo "Deployment successful!"
+            echo "================================"
