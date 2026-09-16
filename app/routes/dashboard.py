@@ -204,18 +204,23 @@ async def _build_full_query(
     search: Optional[str] = None,
 ):
     """Build full MongoDB query incorporating file_id, brand, location, dates, search."""
+    from app.utils.datetime_utils import parse_date_filter
     query = await _build_file_query(file_id, region_id, country_id, ib_version_id)
     if brand_model and brand_model != "All Brands":
         query["brand_model"] = {"$regex": f"^{re.escape(brand_model)}$", "$options": "i"}
     if survey_location:
         query["survey_location"] = {"$regex": survey_location, "$options": "i"}
     if date_from:
-        query["survey_date"] = {"$gte": date_from}
+        parsed_from = parse_date_filter(date_from)
+        if parsed_from:
+            query["survey_date"] = {"$gte": parsed_from}
     if date_to:
-        if "survey_date" in query:
-            query["survey_date"]["$lte"] = date_to
-        else:
-            query["survey_date"] = {"$lte": date_to}
+        parsed_to = parse_date_filter(date_to)
+        if parsed_to:
+            if "survey_date" in query:
+                query["survey_date"]["$lte"] = parsed_to
+            else:
+                query["survey_date"] = {"$lte": parsed_to}
     if search:
         query["$or"] = [
             {"brand_model": {"$regex": search, "$options": "i"}},

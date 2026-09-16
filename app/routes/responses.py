@@ -11,6 +11,7 @@ from app.models.user import User
 from app.models.survey_response import SurveyResponse
 from app.models.uploaded_file import UploadedFile
 from app.middleware.auth import get_admin_or_super
+from app.utils.datetime_utils import parse_date_filter
 
 router = APIRouter(prefix="/responses", tags=["Survey Responses"])
 
@@ -65,9 +66,9 @@ async def get_responses(
     if date_from or date_to:
         date_filter = {}
         if date_from:
-            date_filter["$gte"] = datetime.fromisoformat(date_from)
+            date_filter["$gte"] = parse_date_filter(date_from)
         if date_to:
-            date_filter["$lte"] = datetime.fromisoformat(date_to)
+            date_filter["$lte"] = parse_date_filter(date_to)
         query["survey_date"] = date_filter
 
     if search:

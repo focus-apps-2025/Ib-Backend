@@ -76,6 +76,31 @@ def parse_date_safe(date_str: Optional[str]) -> Optional[datetime]:
     return None
 
 
+def parse_date_filter(date_str: Optional[str]) -> Optional[datetime]:
+    """
+    Parse a filter date string into a datetime.
+
+    Accepts:
+      - "YYYY-MM"  (month granularity; resolves to the 1st of that month)
+      - "YYYY-MM-DD"
+      - Full ISO 8601 datetimes (as produced by ``datetime.isoformat()``).
+
+    Returns ``None`` for empty or unparseable input.
+    """
+    if not date_str:
+        return None
+    s = date_str.strip()
+    try:
+        return datetime.fromisoformat(s)
+    except ValueError:
+        pass
+    try:
+        return datetime.strptime(s, "%Y-%m")
+    except ValueError:
+        pass
+    return None
+
+
 def get_age_group(age: Optional[float]) -> str:
     """
     Get age group string.

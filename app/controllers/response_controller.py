@@ -2,13 +2,13 @@
 Response controller - Business logic for survey response management.
 """
 from typing import Dict, Any, Optional, List
-from datetime import datetime
 from beanie import PydanticObjectId
 from fastapi import HTTPException
 from loguru import logger
 
 from app.models.survey_response import SurveyResponse
 from app.models.uploaded_file import UploadedFile
+from app.utils.datetime_utils import parse_date_filter
 
 
 class ResponseController:
@@ -63,9 +63,9 @@ class ResponseController:
         if date_from or date_to:
             date_filter = {}
             if date_from:
-                date_filter["$gte"] = datetime.fromisoformat(date_from)
+                date_filter["$gte"] = parse_date_filter(date_from)
             if date_to:
-                date_filter["$lte"] = datetime.fromisoformat(date_to)
+                date_filter["$lte"] = parse_date_filter(date_to)
             query["survey_date"] = date_filter
 
         if search:

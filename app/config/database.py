@@ -31,6 +31,7 @@ async def connect_to_mongo():
         from app.models.activity_log import ActivityLog
         from app.models.user_preference import UserPreference
         from app.models.system_setting import SystemSetting
+        from app.models.market_feedback import MarketFeedback
 
         await init_beanie(
             database=db_instance.db,
@@ -46,9 +47,11 @@ async def connect_to_mongo():
                 ActivityLog,
                 UserPreference,
                 SystemSetting,
+                MarketFeedback,
             ],
         )
-        logger.success("✅ MongoDB connected and Beanie initialized")
+
+        logger.success("✅ MongoDB connected")
     except Exception as e:
         logger.error(f"❌ MongoDB connection failed: {e}")
         raise

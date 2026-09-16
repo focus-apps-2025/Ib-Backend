@@ -79,6 +79,7 @@ from app.routes.issues import router as issues_router
 from app.routes.dashboard import router as dashboard_router
 from app.routes.comparison import router as comparison_router
 from app.routes.activity_logs import router as activity_logs_router
+from app.routes.market_feedback import router as market_feedback_router
 
 API_PREFIX = "/api"
 
@@ -93,6 +94,8 @@ app.include_router(issues_router, prefix=API_PREFIX)
 app.include_router(dashboard_router, prefix=API_PREFIX)
 app.include_router(comparison_router, prefix=API_PREFIX)
 app.include_router(activity_logs_router, prefix=API_PREFIX)
+app.include_router(market_feedback_router, prefix=API_PREFIX)
+
 
 
 @app.get("/api/health")

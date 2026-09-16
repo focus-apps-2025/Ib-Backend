@@ -19,7 +19,7 @@ async def list_activity_logs(
     date_to: Optional[str] = None,
     _: User = Depends(get_super_admin),
 ):
-    from datetime import datetime
+    from app.utils.datetime_utils import parse_date_filter
     query = {}
     if user_id:
         query["user_id"] = PydanticObjectId(user_id)
@@ -28,9 +28,9 @@ async def list_activity_logs(
     if date_from or date_to:
         date_filter = {}
         if date_from:
-            date_filter["$gte"] = datetime.fromisoformat(date_from)
+            date_filter["$gte"] = parse_date_filter(date_from)
         if date_to:
-            date_filter["$lte"] = datetime.fromisoformat(date_to)
+            date_filter["$lte"] = parse_date_filter(date_to)
         query["created_at"] = date_filter
 
     skip = (page - 1) * page_size

@@ -50,6 +50,14 @@ class Settings(BaseSettings):
     SUPER_ADMIN_PASSWORD: str = "SuperAdmin@123"
     SUPER_ADMIN_FULLNAME: str = "Super Administrator"
 
+    # AWS S3 Configuration
+    AWS_ACCESS_KEY_ID: str = ""
+    AWS_SECRET_ACCESS_KEY: str = ""
+    AWS_S3_REGION: str = "ap-south-1"
+    AWS_S3_BUCKET: str = "ibreport"
+    AWS_CLOUDFRONT_DOMAIN: str = ""
+
+
     @property
     def allowed_origins_list(self) -> List[str]:
         return [o.strip() for o in self.ALLOWED_ORIGINS.split(",")]

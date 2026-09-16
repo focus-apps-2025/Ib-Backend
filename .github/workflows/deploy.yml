@@ -1,0 +1,38 @@
+name: Deploy Ib-Backend
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+
+            echo "Starting deployment..."
+
+            cd /var/www/ib-backend
+
+            echo "Pulling latest code..."
+            git pull origin main
+
+            echo "Activating virtual environment..."
+            source venv/bin/activate
+
+            echo "Installing dependencies..."
+            pip install -r requirements.txt
+
+            echo "Restarting backend..."
+            pm2 restart ib-backend
+
+            echo "Deployment completed successfully!"
