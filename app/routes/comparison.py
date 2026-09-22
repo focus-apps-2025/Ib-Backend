@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from typing import Optional
 
 from app.models.user import User
-from app.middleware.auth import get_admin_or_super
+from app.middleware.scope import ScopedUser, get_scoped_user
 from app.routes.dashboard import brand_comparison, brand_topics
 
 router = APIRouter(prefix="/comparison", tags=["Comparison"])
@@ -14,7 +14,7 @@ async def get_brand_passive_issues(
     region_id: Optional[str] = None,
     country_id: Optional[str] = None,
     ib_version_id: Optional[str] = None,
-    _: User = Depends(get_admin_or_super),
+    scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
     """Alias for dashboard brand-comparison endpoint."""
     return await brand_comparison(
@@ -22,6 +22,7 @@ async def get_brand_passive_issues(
         region_id=region_id,
         country_id=country_id,
         ib_version_id=ib_version_id,
+        scoped_user=scoped_user,
     )
 
 
@@ -31,7 +32,7 @@ async def get_brand_topics_endpoint(
     region_id: Optional[str] = None,
     country_id: Optional[str] = None,
     ib_version_id: Optional[str] = None,
-    _: User = Depends(get_admin_or_super),
+    scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
     """Alias for dashboard brand-topics endpoint."""
     return await brand_topics(
@@ -39,4 +40,5 @@ async def get_brand_topics_endpoint(
         region_id=region_id,
         country_id=country_id,
         ib_version_id=ib_version_id,
+        scoped_user=scoped_user,
     )

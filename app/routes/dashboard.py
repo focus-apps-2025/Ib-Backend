@@ -4,9 +4,9 @@ from typing import Optional, Any, List, Dict
 
 from app.models.user import User
 from app.middleware.auth import get_admin_or_super
+from app.middleware.scope import ScopedUser, get_scoped_user
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
-
 
 
 @router.get("/stats")
@@ -15,7 +15,7 @@ async def dashboard_stats(
     region_id: Optional[str] = None,
     country_id: Optional[str] = None,
     ib_version_id: Optional[str] = None,
-    _: User = Depends(get_admin_or_super),
+    scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
     """Combined dashboard summary stats."""
     from app.models.survey_response import SurveyResponse
@@ -23,35 +23,21 @@ async def dashboard_stats(
     from app.models.issue_analysis import IssueAnalysis
     from beanie import PydanticObjectId
 
-    file_ids = []
-    if file_id:
-        file_ids = [PydanticObjectId(file_id)]
-    elif region_id or country_id or ib_version_id:
-        file_query = {}
-        if region_id:
-            file_query["region_id"] = PydanticObjectId(region_id)
-        if country_id:
-            file_query["country_id"] = PydanticObjectId(country_id)
-        if ib_version_id:
-            file_query["ib_version_id"] = PydanticObjectId(ib_version_id)
-        files = await UploadedFile.find({**file_query, "status": "completed"}).to_list()
-        file_ids = [f.id for f in files]
-
-    query = {}
-    if file_ids:
-        query["file_id"] = {"$in": file_ids}
-    elif region_id or country_id or ib_version_id:
-        # Filters specified but no matching completed uploads → return empty
-        query["file_id"] = {"$in": []}
+    query = await _build_full_query(file_id, region_id, country_id, ib_version_id, scoped_user=scoped_user)
 
     total_records = await SurveyResponse.find(query).count()
     brands = await SurveyResponse.distinct("brand_model", filter=query if query else None)
     locations = await SurveyResponse.distinct("survey_location", filter=query if query else None)
-    total_uploads = await UploadedFile.find(
-        {"status": "completed", **({"region_id": PydanticObjectId(region_id)} if region_id else {}),
-         **({"country_id": PydanticObjectId(country_id)} if country_id else {}),
-         **({"ib_version_id": PydanticObjectId(ib_version_id)} if ib_version_id else {})}
-    ).count()
+
+    file_query = {"status": "completed"}
+    if region_id:
+        file_query["region_id"] = PydanticObjectId(region_id)
+    if country_id:
+        file_query["country_id"] = PydanticObjectId(country_id)
+    if ib_version_id:
+        file_query["ib_version_id"] = PydanticObjectId(ib_version_id)
+    file_query = scoped_user.apply_to_file_query(file_query)
+    total_uploads = await UploadedFile.find(file_query).count()
 
     pipeline = [
         {"$match": query},
@@ -97,9 +83,11 @@ async def dashboard_stats(
 
 
 @router.get("/charts/brand-distribution")
-async def brand_distribution(_: User = Depends(get_admin_or_super)):
+async def brand_distribution(scoped_user: ScopedUser = Depends(get_scoped_user)):
     from app.models.survey_response import SurveyResponse
+    query = scoped_user.apply_to_query({})
     pipeline = [
+        {"$match": query},
         {"$group": {"_id": "$brand_model", "count": {"$sum": 1}}},
         {"$sort": {"count": -1}},
         {"$limit": 20},
@@ -109,10 +97,11 @@ async def brand_distribution(_: User = Depends(get_admin_or_super)):
 
 
 @router.get("/charts/nps-distribution")
-async def nps_distribution(_: User = Depends(get_admin_or_super)):
+async def nps_distribution(scoped_user: ScopedUser = Depends(get_scoped_user)):
     from app.models.survey_response import SurveyResponse
+    query = scoped_user.apply_to_query({"nps_score": {"$ne": None}})
     pipeline = [
-        {"$match": {"nps_score": {"$ne": None}}},
+        {"$match": query},
         {"$group": {"_id": "$nps_score", "count": {"$sum": 1}}},
         {"$sort": {"_id": 1}},
     ]
@@ -121,11 +110,12 @@ async def nps_distribution(_: User = Depends(get_admin_or_super)):
 
 
 @router.get("/charts/location-issues")
-async def location_issues_heatmap(_: User = Depends(get_admin_or_super)):
+async def location_issues_heatmap(scoped_user: ScopedUser = Depends(get_scoped_user)):
     """Heatmap: location × issue count."""
     from app.models.survey_response import SurveyResponse
+    query = scoped_user.apply_to_query({"complaint_groups": {"$ne": []}})
     pipeline = [
-        {"$match": {"complaint_groups": {"$ne": []}}},
+        {"$match": query},
         {"$unwind": "$complaint_groups"},
         {
             "$match": {
@@ -164,6 +154,7 @@ async def _build_file_query(
     region_id: Optional[str],
     country_id: Optional[str],
     ib_version_id: Optional[str],
+    scoped_user: Optional[ScopedUser] = None,
 ):
     """Build a file_id $in query from the given filters."""
     from app.models.uploaded_file import UploadedFile
@@ -180,6 +171,8 @@ async def _build_file_query(
             file_query["country_id"] = PydanticObjectId(country_id)
         if ib_version_id:
             file_query["ib_version_id"] = PydanticObjectId(ib_version_id)
+        if scoped_user:
+            file_query = scoped_user.apply_to_file_query(file_query)
         files = await UploadedFile.find({**file_query, "status": "completed"}).to_list()
         file_ids = [f.id for f in files]
 
@@ -189,6 +182,7 @@ async def _build_file_query(
     elif region_id or country_id or ib_version_id:
         # Filters specified but no matching completed uploads → return empty
         query["file_id"] = {"$in": []}
+
     return query
 
 
@@ -202,10 +196,11 @@ async def _build_full_query(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     search: Optional[str] = None,
+    scoped_user: Optional[ScopedUser] = None,
 ):
-    """Build full MongoDB query incorporating file_id, brand, location, dates, search."""
+    """Build full MongoDB query incorporating file_id, brand, location, dates, search, and scoped_user."""
     from app.utils.datetime_utils import parse_date_filter
-    query = await _build_file_query(file_id, region_id, country_id, ib_version_id)
+    query = await _build_file_query(file_id, region_id, country_id, ib_version_id, scoped_user)
     if brand_model and brand_model != "All Brands":
         query["brand_model"] = {"$regex": f"^{re.escape(brand_model)}$", "$options": "i"}
     if survey_location:
@@ -226,6 +221,8 @@ async def _build_full_query(
             {"brand_model": {"$regex": search, "$options": "i"}},
             {"survey_location": {"$regex": search, "$options": "i"}},
         ]
+    if scoped_user:
+        query = scoped_user.apply_to_query(query)
     return query
 
 
@@ -240,7 +237,7 @@ async def get_top_issues_by_nps(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     search: Optional[str] = None,
-    _: User = Depends(get_admin_or_super),
+    scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
     """
     Get top 10 issues per NPS category (Promoters = Yes, Passives = Maybe, Detractors = No).
@@ -249,7 +246,7 @@ async def get_top_issues_by_nps(
 
     query = await _build_full_query(
         file_id, region_id, country_id, ib_version_id, brand_model, survey_location, date_from, date_to, search
-    )
+    , scoped_user=scoped_user)
 
     pipeline = [
         {"$match": {**query, "recommend_category": {"$in": ["Yes", "Maybe", "No"]}}},
@@ -316,7 +313,7 @@ async def get_top_passive_topics_by_nps(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     search: Optional[str] = None,
-    _: User = Depends(get_admin_or_super),
+    scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
     """
     Get top 10 passive (good) topics per NPS category (Promoters = Yes, Passives = Maybe, Detractors = No).
@@ -325,7 +322,7 @@ async def get_top_passive_topics_by_nps(
 
     query = await _build_full_query(
         file_id, region_id, country_id, ib_version_id, brand_model, survey_location, date_from, date_to, search
-    )
+    , scoped_user=scoped_user)
 
     pipeline = [
         {"$match": {**query, "recommend_category": {"$in": ["Yes", "Maybe", "No"]}}},
@@ -415,7 +412,7 @@ async def get_brand_nps_feedback(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     search: Optional[str] = None,
-    _: User = Depends(get_admin_or_super),
+    scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
     """
     Get per-brand NPS-segmented feedback for:
@@ -423,13 +420,16 @@ async def get_brand_nps_feedback(
     - Promoters (Yes)
     - Passives (Maybe)
     - Detractors (No)
-    Returns total respondent base, top 10 passive topics, and top 10 issues for each brand and category.
+    Returns total respondent base, top 25 passive topics, and top 25 issues for each brand and category.
+    Percentages are computed as (topic_count / segment_base * 100).
     """
     from app.models.survey_response import SurveyResponse
     from collections import defaultdict
 
     query = await _build_full_query(
-        file_id, region_id, country_id, ib_version_id, brand_model, survey_location, date_from, date_to, search
+        file_id, region_id, country_id, ib_version_id, brand_model,
+        survey_location, date_from, date_to, search,
+        scoped_user=scoped_user,
     )
 
     raw_brands = await SurveyResponse.distinct("brand_model", filter=query if query else None)
@@ -575,32 +575,28 @@ async def get_brand_nps_feedback(
         bases = brand_bases[b]
         categories_data = {}
         for cat_code, cat_name in CAT_MAP.items():
-            base_val = bases[cat_code]
-            
+            base_val = bases[cat_code]      # segment base: overall / Yes / Maybe / No
+
+            # ─── TOPICS ─────────────────────────────────────────────
             top_topics_dict = brand_topics[b][cat_code]
             sorted_topics = sorted(top_topics_dict.items(), key=lambda x: x[1], reverse=True)[:25]
             topics_list = []
             for t, cnt in sorted_topics:
-                if cat_code == "overall":
-                    pct = round((cnt / base_val * 100), 1) if base_val > 0 else 0
-                else:
-                    tot_t = brand_topics[b]["overall"].get(t, cnt)
-                    pct = round((cnt / tot_t * 100), 1) if tot_t > 0 else 0
+                # ✅ Always divide by the segment base
+                pct = round((cnt / base_val * 100), 1) if base_val > 0 else 0
                 topics_list.append({
                     "topic": t,
                     "count": cnt,
                     "percentage": pct
                 })
 
+            # ─── ISSUES ─────────────────────────────────────────────
             top_issues_dict = brand_issues[b][cat_code]
             sorted_issues = sorted(top_issues_dict.items(), key=lambda x: x[1], reverse=True)[:25]
             issues_list = []
             for i, cnt in sorted_issues:
-                if cat_code == "overall":
-                    pct = round((cnt / base_val * 100), 1) if base_val > 0 else 0
-                else:
-                    tot_i = brand_issues[b]["overall"].get(i, cnt)
-                    pct = round((cnt / tot_i * 100), 1) if tot_i > 0 else 0
+                # ✅ Always divide by the segment base
+                pct = round((cnt / base_val * 100), 1) if base_val > 0 else 0
                 issues_list.append({
                     "issue": i,
                     "count": cnt,
@@ -633,7 +629,7 @@ async def get_service_frequency(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     search: Optional[str] = None,
-    _: User = Depends(get_admin_or_super),
+    scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
     """
     Get Service Frequency analysis for:
@@ -647,7 +643,7 @@ async def get_service_frequency(
 
     query = await _build_full_query(
         file_id, region_id, country_id, ib_version_id, brand_model, survey_location, date_from, date_to, search
-    )
+    , scoped_user=scoped_user)
 
     pipeline = [
         {"$match": query},
@@ -783,7 +779,7 @@ async def get_service_nps(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     search: Optional[str] = None,
-    _: User = Depends(get_admin_or_super),
+    scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
     """
     Get Service NPS Analysis for:
@@ -798,7 +794,7 @@ async def get_service_nps(
 
     query = await _build_full_query(
         file_id, region_id, country_id, ib_version_id, brand_model, survey_location, date_from, date_to, search
-    )
+    , scoped_user=scoped_user)
 
     pipeline = [
         {"$match": query},
@@ -1061,7 +1057,7 @@ async def get_service_benefits_betterments(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     search: Optional[str] = None,
-    _: User = Depends(get_admin_or_super),
+    scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
     """
     Get Benefits (OI-OU) & Betterments/Issues (OV-PJ) analysis for:
@@ -1076,7 +1072,7 @@ async def get_service_benefits_betterments(
 
     query = await _build_full_query(
         file_id, region_id, country_id, ib_version_id, brand_model, survey_location, date_from, date_to, search
-    )
+    , scoped_user=scoped_user)
 
     pipeline = [
         {"$match": query},
@@ -1103,41 +1099,41 @@ async def get_service_benefits_betterments(
     ]
     results = await SurveyResponse.aggregate(pipeline).to_list(length=None)
 
-    oi_ou_cols = [index_to_col_letter(i) for i in range(col_letter_to_index("OI"), col_letter_to_index("OU") + 1)]
-    ov_pj_cols = [index_to_col_letter(i) for i in range(col_letter_to_index("OV"), col_letter_to_index("PJ") + 1)]
+    oi_ou_cols = [index_to_col_letter(i) for i in range(col_letter_to_index("OK"), col_letter_to_index("OW") + 1)]
+    ov_pj_cols = [index_to_col_letter(i) for i in range(col_letter_to_index("OX"), col_letter_to_index("PL") + 1)]
 
     benefit_topics = {
-        "OI": "Resolution of Problem is good",
-        "OJ": "Parts availability & quality",
-        "OK": "Skilled Manpower is available in workshop",
-        "OL": "Washing Quality",
-        "OM": "Happy with Service Adviser Behaviour",
-        "ON": "Cost & Explanation was good",
-        "OO": "Easy of Payment Method available",
-        "OP": "Warranty Policy is good",
-        "OQ": "Waiting Time was adequate",
-        "OR": "Satisfied with Customer Lounge Amenities",
-        "OS": "Extension of Operating Hours is very supportive",
-        "OT": "Workshop Facilities",
-        "OU": "Convenience of Location",
+        "OK": "Resolution of Problem is good",
+        "OL": "Parts availability & quality",
+        "OM": "Skilled Manpower is available in workshop",
+        "ON": "Washing Quality",
+        "OO": "Happy with Service Adviser Behaviour",
+        "OP": "Cost & Explanation was good",
+        "OQ": "Easy of Payment Method available",
+        "OR": "Warranty Policy is good",
+        "OS": "Waiting Time was adequate",
+        "OT": "Satisfied with Customer Lounge Amenities",
+        "OU": "Extension of Operating Hours is very supportive",
+        "OV": "Workshop Facilities",
+        "OW": "Convenience of Location",
     }
 
     issue_topics = {
-        "OV": "Complaints not resolved",
-        "OW": "Parts availability issues",
-        "OX": "Parts availability issues",
+        "OX": "Complaints not resolved",
         "OY": "Parts availability issues",
-        "OZ": "Improve Skilled Manpower",
-        "PA": "Washing Quality issues",
-        "PB": "Service Adviser Behaviour issues",
-        "PC": "Not satisfied with Cost & Explanation",
-        "PD": "Payment Method issues",
-        "PE": "Warranty Policy issues",
-        "PF": "Waiting Time is more",
-        "PG": "Improve Customer Lounge Amenities",
-        "PH": "Extend Operating Hours",
-        "PI": "Improve Workshop Facilities",
-        "PJ": "Convenience of Location issues",
+        "OZ": "Parts availability issues",
+        "PA": "Parts availability issues",
+        "PB": "Improve Skilled Manpower",
+        "PC": "Washing Quality issues",
+        "PD": "Service Adviser Behaviour issues",
+        "PE": "Not satisfied with Cost & Explanation",
+        "PF": "Payment Method issues",
+        "PG": "Warranty Policy issues",
+        "PH": "Waiting Time is more",
+        "PI": "Improve Customer Lounge Amenities",
+        "PJ": "Extend Operating Hours",
+        "PK": "Improve Workshop Facilities",
+        "PL": "Convenience of Location issues",
     }
 
     def parse_workshop(val: Any) -> str:
@@ -1180,28 +1176,38 @@ async def get_service_benefits_betterments(
                 pass
         return "passive"
 
+        
+
     def init_section():
         return {
             "total_responses": 0,
             "overall": {
+                "base": 0,
+                "brand_bases": defaultdict(int),
                 "benefits": defaultdict(int),
                 "issues": defaultdict(int),
                 "brand_benefits": defaultdict(lambda: defaultdict(int)),
                 "brand_issues": defaultdict(lambda: defaultdict(int)),
             },
             "promoter": {
+                "base": 0,
+                "brand_bases": defaultdict(int),
                 "benefits": defaultdict(int),
                 "issues": defaultdict(int),
                 "brand_benefits": defaultdict(lambda: defaultdict(int)),
                 "brand_issues": defaultdict(lambda: defaultdict(int)),
             },
             "passive": {
+                "base": 0,
+                "brand_bases": defaultdict(int),
                 "benefits": defaultdict(int),
                 "issues": defaultdict(int),
                 "brand_benefits": defaultdict(lambda: defaultdict(int)),
                 "brand_issues": defaultdict(lambda: defaultdict(int)),
             },
             "detractor": {
+                "base": 0,
+                "brand_bases": defaultdict(int),
                 "benefits": defaultdict(int),
                 "issues": defaultdict(int),
                 "brand_benefits": defaultdict(lambda: defaultdict(int)),
@@ -1222,10 +1228,20 @@ async def get_service_benefits_betterments(
 
         sec = sections[w_type]
         sec["total_responses"] += 1
+        
+        sec["overall"]["base"] += 1
+        sec["overall"]["brand_bases"][b] += 1
+        sec[nps_cat]["base"] += 1
+        sec[nps_cat]["brand_bases"][b] += 1
 
         # Check Benefits (OI-OU)
+        # Track which topics already counted for this respondent (avoid double-counting
+        # when multiple columns map to the same topic name, e.g. OY/OZ/PA → "Parts availability issues")
+        counted_benefit_topics = set()
         for col in oi_ou_cols:
             topic = benefit_topics.get(col, COLUMN_HEADERS_MAP.get(col, col))
+            if topic in counted_benefit_topics:
+                continue  # already counted this topic for this respondent
             val = fd.get(col) or fd.get(COLUMN_HEADERS_MAP.get(col, ""))
             if not val:
                 hdr = COLUMN_HEADERS_MAP.get(col, "")
@@ -1235,14 +1251,17 @@ async def get_service_benefits_betterments(
                             val = v
                             break
             if val and str(val).strip() and str(val).strip().lower() not in ("nan", "none", "0", "false", "no", "-"):
+                counted_benefit_topics.add(topic)
                 sec["overall"]["benefits"][topic] += 1
                 sec["overall"]["brand_benefits"][b][topic] += 1
                 sec[nps_cat]["benefits"][topic] += 1
                 sec[nps_cat]["brand_benefits"][b][topic] += 1
 
-        # Check Issues (OV-PJ)
+        counted_issue_topics = set()
         for col in ov_pj_cols:
             topic = issue_topics.get(col, COLUMN_HEADERS_MAP.get(col, col))
+            if topic in counted_issue_topics:
+                continue  # already counted this topic for this respondent
             val = fd.get(col) or fd.get(COLUMN_HEADERS_MAP.get(col, ""))
             if not val:
                 hdr = COLUMN_HEADERS_MAP.get(col, "")
@@ -1252,36 +1271,43 @@ async def get_service_benefits_betterments(
                             val = v
                             break
             if val and str(val).strip() and str(val).strip().lower() not in ("nan", "none", "0", "false", "no", "-"):
+                counted_issue_topics.add(topic)
                 sec["overall"]["issues"][topic] += 1
                 sec["overall"]["brand_issues"][b][topic] += 1
                 sec[nps_cat]["issues"][topic] += 1
                 sec[nps_cat]["brand_issues"][b][topic] += 1
 
     def format_sub_analysis(sub_data: dict) -> dict:
+        base = sub_data.get("base", 0)
+        brand_bases = sub_data.get("brand_bases", {})
+
         top_b = [
-            {"topic": k, "count": v}
+            {"topic": k, "count": v, "percentage": round((v / base * 100), 1) if base > 0 else 0}
             for k, v in sorted(sub_data["benefits"].items(), key=lambda x: x[1], reverse=True)[:25]
         ]
         top_i = [
-            {"topic": k, "count": v}
+            {"topic": k, "count": v, "percentage": round((v / base * 100), 1) if base > 0 else 0}
             for k, v in sorted(sub_data["issues"].items(), key=lambda x: x[1], reverse=True)[:25]
         ]
         
         brand_b = {}
         for brand, topic_counts in sub_data["brand_benefits"].items():
+            b_base = brand_bases.get(brand, 0)
             brand_b[brand] = [
-                {"topic": k, "count": v}
+                {"topic": k, "count": v, "percentage": round((v / b_base * 100), 1) if b_base > 0 else 0}
                 for k, v in sorted(topic_counts.items(), key=lambda x: x[1], reverse=True)[:25]
             ]
             
         brand_i = {}
         for brand, topic_counts in sub_data["brand_issues"].items():
+            b_base = brand_bases.get(brand, 0)
             brand_i[brand] = [
-                {"topic": k, "count": v}
+                {"topic": k, "count": v, "percentage": round((v / b_base * 100), 1) if b_base > 0 else 0}
                 for k, v in sorted(topic_counts.items(), key=lambda x: x[1], reverse=True)[:25]
             ]
 
         return {
+            "base": base,
             "top_benefits": top_b,
             "top_issues": top_i,
             "brand_benefits": brand_b,
@@ -1316,7 +1342,7 @@ async def brand_comparison(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     search: Optional[str] = None,
-    _: User = Depends(get_admin_or_super),
+    scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
     """
     Brand-wise comparison between Passive (Good) feedback and Issues (Complaints).
@@ -1326,7 +1352,7 @@ async def brand_comparison(
 
     query = await _build_full_query(
         file_id, region_id, country_id, ib_version_id, brand_model, survey_location, date_from, date_to, search
-    )
+    , scoped_user=scoped_user)
 
     pipeline = [
         {"$match": query},
@@ -1409,7 +1435,7 @@ async def passive_topics(
     region_id: Optional[str] = None,
     country_id: Optional[str] = None,
     ib_version_id: Optional[str] = None,
-    _: User = Depends(get_admin_or_super),
+    scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
     """
     Count of positive feedback per topic (from passive_data).
@@ -1417,7 +1443,9 @@ async def passive_topics(
     """
     from app.models.survey_response import SurveyResponse
 
-    query = await _build_file_query(file_id, region_id, country_id, ib_version_id)
+    query = await _build_file_query(file_id, region_id, country_id, ib_version_id, scoped_user=scoped_user)
+    if scoped_user:
+        query = scoped_user.apply_to_query(query)
 
     pipeline = [
         {"$match": query},
@@ -1475,7 +1503,7 @@ async def brand_topics(
     region_id: Optional[str] = None,
     country_id: Optional[str] = None,
     ib_version_id: Optional[str] = None,
-    _: User = Depends(get_admin_or_super),
+    scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
     """
     Per-brand topic breakdown for both passive (good) feedback and issues (complaints).
@@ -1483,7 +1511,9 @@ async def brand_topics(
     """
     from app.models.survey_response import SurveyResponse
 
-    query = await _build_file_query(file_id, region_id, country_id, ib_version_id)
+    query = await _build_file_query(file_id, region_id, country_id, ib_version_id, scoped_user=scoped_user)
+    if scoped_user:
+        query = scoped_user.apply_to_query(query)
 
     # Passive topics per brand
     passive_pipeline = [
@@ -1648,7 +1678,7 @@ async def dashboard_analytics(
     region_id: Optional[str] = None,
     country_id: Optional[str] = None,
     ib_version_id: Optional[str] = None,
-    _: User = Depends(get_admin_or_super),
+    scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
     """
     Detailed dashboard analytics using MongoDB aggregation pipelines:
@@ -1657,7 +1687,9 @@ async def dashboard_analytics(
     from app.models.survey_response import SurveyResponse
     from collections import defaultdict
 
-    query = await _build_file_query(file_id, region_id, country_id, ib_version_id)
+    query = await _build_file_query(file_id, region_id, country_id, ib_version_id, scoped_user=scoped_user)
+    if scoped_user:
+        query = scoped_user.apply_to_query(query)
     # Fetch distinct brands from the DB (normalised) instead of hardcoding
     raw_brands = await SurveyResponse.distinct(
         "brand_model", filter=query if query else None
@@ -2393,7 +2425,7 @@ async def get_age_distribution(
     region_id: Optional[str] = None,
     country_id: Optional[str] = None,
     ib_version_id: Optional[str] = None,
-    _: User = Depends(get_admin_or_super),
+    scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
     res = await dashboard_analytics(file_id, region_id, country_id, ib_version_id)
     return res["age_group"]
@@ -2405,7 +2437,7 @@ async def get_age_city_brand(
     region_id: Optional[str] = None,
     country_id: Optional[str] = None,
     ib_version_id: Optional[str] = None,
-    _: User = Depends(get_admin_or_super),
+    scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
     res = await dashboard_analytics(file_id, region_id, country_id, ib_version_id)
     return res["age_city"]
@@ -2417,7 +2449,7 @@ async def get_purchase_ownership(
     region_id: Optional[str] = None,
     country_id: Optional[str] = None,
     ib_version_id: Optional[str] = None,
-    _: User = Depends(get_admin_or_super),
+    scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
     res = await dashboard_analytics(file_id, region_id, country_id, ib_version_id)
     return {
@@ -2432,7 +2464,7 @@ async def get_profession_distribution(
     region_id: Optional[str] = None,
     country_id: Optional[str] = None,
     ib_version_id: Optional[str] = None,
-    _: User = Depends(get_admin_or_super),
+    scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
     res = await dashboard_analytics(file_id, region_id, country_id, ib_version_id)
     return res["profession"]
@@ -2444,7 +2476,7 @@ async def get_nps_data(
     region_id: Optional[str] = None,
     country_id: Optional[str] = None,
     ib_version_id: Optional[str] = None,
-    _: User = Depends(get_admin_or_super),
+    scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
     """
     Get NPS data including recommendation metrics, city-wise grids, and duration of usage segmentation.
@@ -2452,7 +2484,10 @@ async def get_nps_data(
     from app.models.survey_response import SurveyResponse
     from collections import defaultdict
 
-    query = await _build_file_query(file_id, region_id, country_id, ib_version_id)
+    query = await _build_file_query(file_id, region_id, country_id, ib_version_id, scoped_user=scoped_user)
+    if scoped_user:
+        query = scoped_user.apply_to_query(query)
+    query = scoped_user.apply_to_query(query)
     raw_brands = await SurveyResponse.distinct("brand_model", filter=query if query else None)
     BRANDS = sorted(set(clean_brand_name(b) for b in raw_brands if b and b != "Blank"))
 
@@ -2593,7 +2628,7 @@ async def get_service_satisfaction(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     search: Optional[str] = None,
-    _: User = Depends(get_admin_or_super),
+    scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
     """
     Get Service Satisfaction analysis for Authorized Service Workshops across brands.
@@ -2606,7 +2641,7 @@ async def get_service_satisfaction(
 
     query = await _build_full_query(
         file_id, region_id, country_id, ib_version_id, brand_model, survey_location, date_from, date_to, search
-    )
+    , scoped_user=scoped_user)
 
     pipeline = [
         {"$match": query},
@@ -2777,7 +2812,7 @@ async def get_ib_summary_table(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     search: Optional[str] = None,
-    _: User = Depends(get_admin_or_super),
+    scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
     """
     Get IB-wise overall summary table data including:
@@ -2803,7 +2838,7 @@ async def get_ib_summary_table(
 
     query = await _build_full_query(
         file_id, region_id, country_id, ib_version_id, None, None, date_from, date_to, search
-    )
+    , scoped_user=scoped_user)
 
     file_filter = {"status": "completed"}
     if region_id:
@@ -3056,5 +3091,93 @@ async def get_ib_summary_table(
         "total_responses": sum(r["total_responses"] for r in summary_rows),
         "total_issues": sum(r["total_issues"] for r in summary_rows),
         "total_benefits": sum(r["total_benefits"] for r in summary_rows),
+    }
+
+
+@router.get("/service-cps")
+async def get_service_cps(
+    file_id: Optional[str] = None,
+    region_id: Optional[str] = None,
+    country_id: Optional[str] = None,
+    ib_version_id: Optional[str] = None,
+    brand_model: Optional[str] = None,
+    survey_location: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    search: Optional[str] = None,
+    scoped_user: ScopedUser = Depends(get_scoped_user),
+):
+    """
+    Get Customer Perception Score (CPS) for TVS Genuine Spare Parts.
+    Questions from full_data:
+    C1: PK (Recommend)
+    C2: PO (Availability)
+    C3: PS (Quality)
+    C4: PW (Value for Money)
+    Returns Yes/Maybe/No counts overall and per brand.
+    """
+    from app.models.survey_response import SurveyResponse
+    from collections import defaultdict
+    import re
+
+    query = await _build_full_query(
+        file_id, region_id, country_id, ib_version_id, brand_model, survey_location, date_from, date_to, search, scoped_user=scoped_user
+    )
+
+    pipeline = [
+        {"$match": query},
+        {
+            "$project": {
+                "brand": "$brand_model",
+                "pk": "$full_data.PM",
+                "po": "$full_data.PQ",
+                "ps": "$full_data.PU",
+                "pw": "$full_data.PY",
+            }
+        }
+    ]
+    results = await SurveyResponse.aggregate(pipeline).to_list(length=None)
+    
+    def clean_val(v):
+        if not v:
+            return None
+        v_str = str(v).strip().lower()
+        if "yes" in v_str:
+            return "Yes"
+        if "no" in v_str and "maybe" not in v_str and "may be" not in v_str and "know" not in v_str:
+            return "No"
+        if "may be" in v_str or "maybe" in v_str:
+            return "Maybe"
+        return None
+
+    questions = ["pk", "po", "ps", "pw"]
+    
+    overall = {q: {"Yes": 0, "Maybe": 0, "No": 0, "total": 0} for q in questions}
+    brand_counts = defaultdict(lambda: {q: {"Yes": 0, "Maybe": 0, "No": 0, "total": 0} for q in questions})
+    
+    for r in results:
+        b = clean_brand_name(r.get("brand"))
+        for q in questions:
+            val = clean_val(r.get(q))
+            if val:
+                overall[q][val] += 1
+                overall[q]["total"] += 1
+                brand_counts[b][q][val] += 1
+                brand_counts[b][q]["total"] += 1
+                
+    brand_breakdown = []
+    for b, b_data in brand_counts.items():
+        if any(b_data[q]["total"] > 0 for q in questions):
+            b_item = {"brand": b}
+            for q in questions:
+                b_item[q] = b_data[q]
+            brand_breakdown.append(b_item)
+            
+    brand_breakdown.sort(key=lambda x: x["brand"])
+    
+    return {
+        "overall": overall,
+        "brand_breakdown": brand_breakdown,
+        "sample_size": len(results)
     }
 

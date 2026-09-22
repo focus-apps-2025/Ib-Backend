@@ -37,9 +37,18 @@ def region_to_dict(r: Region, country_count: int = 0) -> dict:
     }
 
 
+from app.middleware.scope import ScopedUser, get_scoped_user
+
+
 @router.get("")
-async def list_regions(_: User = Depends(get_current_user)):
-    regions = await Region.find_all().sort("+display_order").to_list()
+async def list_regions(scoped_user: ScopedUser = Depends(get_scoped_user)):
+    scope = scoped_user.scope
+    if scoped_user.user.role == "super_admin" or scope is None or scope.all_regions:
+        regions = await Region.find_all().sort("+display_order").to_list()
+    else:
+        allowed = scope.region_ids or []
+        regions = await Region.find({"_id": {"$in": allowed}}).sort("+display_order").to_list() if allowed else []
+
     result = []
     for r in regions:
         count = await Country.find({"region_id": r.id}).count()

@@ -41,23 +41,39 @@ async def country_to_dict(c: Country) -> dict:
     }
 
 
+from app.middleware.scope import ScopedUser, get_scoped_user
+
+
 @router.get("")
 async def list_countries(
     region_id: Optional[str] = None,
-    _: User = Depends(get_current_user),
+    scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
     query = {}
     if region_id:
         query["region_id"] = PydanticObjectId(region_id)
+    scope = scoped_user.scope
+    if scoped_user.user.role != "super_admin" and scope is not None and not scope.all_countries:
+        allowed = scope.country_ids or []
+        if "region_id" in query:
+            query = {"$and": [{"region_id": query["region_id"]}, {"_id": {"$in": allowed}}]}
+        else:
+            query["_id"] = {"$in": allowed}
     countries = await Country.find(query).sort("+display_order").to_list()
     return {"data": [await country_to_dict(c) for c in countries], "total": len(countries)}
 
 
 @router.get("/region/{region_id}")
-async def get_countries_by_region(region_id: str, _: User = Depends(get_current_user)):
-    countries = await Country.find(
-        {"region_id": PydanticObjectId(region_id)}
-    ).sort("+display_order").to_list()
+async def get_countries_by_region(
+    region_id: str,
+    scoped_user: ScopedUser = Depends(get_scoped_user),
+):
+    query = {"region_id": PydanticObjectId(region_id)}
+    scope = scoped_user.scope
+    if scoped_user.user.role != "super_admin" and scope is not None and not scope.all_countries:
+        allowed = scope.country_ids or []
+        query = {"$and": [{"region_id": PydanticObjectId(region_id)}, {"_id": {"$in": allowed}}]}
+    countries = await Country.find(query).sort("+display_order").to_list()
     return {"data": [await country_to_dict(c) for c in countries]}
 
 

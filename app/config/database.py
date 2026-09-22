@@ -32,6 +32,7 @@ async def connect_to_mongo():
         from app.models.user_preference import UserPreference
         from app.models.system_setting import SystemSetting
         from app.models.market_feedback import MarketFeedback
+        from app.models.user_scope import UserScope
 
         await init_beanie(
             database=db_instance.db,
@@ -48,6 +49,7 @@ async def connect_to_mongo():
                 UserPreference,
                 SystemSetting,
                 MarketFeedback,
+                UserScope,
             ],
         )
 

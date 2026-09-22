@@ -10,7 +10,11 @@ from beanie import PydanticObjectId
 from app.models.user import User
 from app.models.survey_response import SurveyResponse
 from app.models.uploaded_file import UploadedFile
+from app.models.region import Region
+from app.models.country import Country
+from app.models.ib_version import IBVersion
 from app.middleware.auth import get_admin_or_super
+from app.middleware.scope import ScopedUser, get_scoped_user
 from app.utils.datetime_utils import parse_date_filter
 
 router = APIRouter(prefix="/responses", tags=["Survey Responses"])
@@ -31,7 +35,7 @@ async def get_responses(
     search: Optional[str] = None,
     sort_by: Optional[str] = "survey_date",
     sort_dir: Optional[str] = "desc",
-    _: User = Depends(get_admin_or_super),
+    scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
     query = {}
 
@@ -79,6 +83,9 @@ async def get_responses(
             {"vin_number": {"$regex": search, "$options": "i"}},
         ]
 
+    # Merge user data-access scope into query
+    query = scoped_user.apply_to_query(query)
+
     skip = (page - 1) * page_size
     sort_key = sort_by or "survey_date"
     sort_order = "-" if sort_dir == "desc" else "+"
@@ -112,7 +119,7 @@ async def get_responses(
         "total": total,
         "page": page,
         "page_size": page_size,
-        "total_pages": (total + page_size - 1) // page_size,
+        "total_pages": (total + page_size - 1) // page_size if total > 0 else 0,
     }
 
 
@@ -122,7 +129,7 @@ async def get_stats(
     region_id: Optional[str] = None,
     country_id: Optional[str] = None,
     ib_version_id: Optional[str] = None,
-    _: User = Depends(get_admin_or_super),
+    scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
     file_ids = []
     if file_id:
@@ -142,8 +149,10 @@ async def get_stats(
     if file_ids:
         query["file_id"] = {"$in": file_ids}
     elif region_id or country_id or ib_version_id:
-        # Filters specified but no matching completed uploads → return empty
         query["file_id"] = {"$in": []}
+
+    # Merge user scope
+    query = scoped_user.apply_to_query(query)
 
     total_records = await SurveyResponse.find(query).count()
 
@@ -160,7 +169,6 @@ async def get_stats(
     agg = await SurveyResponse.aggregate(pipeline).to_list()
     stats = agg[0] if agg else {}
 
-    # Unique locations
     locations = await SurveyResponse.distinct("survey_location", filter=query if query else None)
     brands = await SurveyResponse.distinct("brand_model", filter=query if query else None)
 
@@ -178,13 +186,55 @@ async def get_stats(
 
 
 @router.get("/filter-options")
-async def get_filter_options(_: User = Depends(get_admin_or_super)):
-    """Get unique values for dropdowns."""
-    brands = await SurveyResponse.distinct("brand_model")
-    locations = await SurveyResponse.distinct("survey_location")
+async def get_filter_options(scoped_user: ScopedUser = Depends(get_scoped_user)):
+    """
+    Get scope-aware unique filter options for dropdowns.
+    Returns brands, locations, regions, countries, and ib_versions allowed for current user.
+    """
+    scope = scoped_user.scope
+    is_unrestricted = scoped_user.user.role == "super_admin" or scope is None
+
+    # Regions
+    if is_unrestricted or scope.all_regions:
+        reg_docs = await Region.find_all().sort("+display_order").to_list()
+    else:
+        reg_docs = await Region.find({"_id": {"$in": scope.region_ids}}).sort("+display_order").to_list() if scope.region_ids else []
+    regions = [{"id": str(r.id), "name": r.name} for r in reg_docs]
+
+    # Countries
+    if is_unrestricted or scope.all_countries:
+        c_docs = await Country.find_all().sort("+display_order").to_list()
+    else:
+        c_docs = await Country.find({"_id": {"$in": scope.country_ids}}).sort("+display_order").to_list() if scope.country_ids else []
+    countries = [{"id": str(c.id), "name": c.name, "region_id": str(c.region_id)} for c in c_docs]
+
+    # IB Versions
+    if is_unrestricted or scope.all_ib_versions:
+        ib_docs = await IBVersion.find_all().sort("+display_order").to_list()
+    else:
+        ib_docs = await IBVersion.find({"_id": {"$in": scope.ib_version_ids}}).sort("+display_order").to_list() if scope.ib_version_ids else []
+    ib_versions = [{"id": str(v.id), "name": v.name} for v in ib_docs]
+
+    # Brands & Locations: get all from allowed files, then intersect with scope
+    # Use apply_to_query which only applies file_id restriction (region/country/IB scope)
+    file_scoped_query = scoped_user.apply_to_query({})
+    all_brands = await SurveyResponse.distinct("brand_model", filter=file_scoped_query)
+    all_locations = await SurveyResponse.distinct("survey_location", filter=file_scoped_query)
+
+    # Intersect with scope's allowed brands/cities if restricted
+    if not is_unrestricted and not scope.all_brands and scope.brand_models:
+        allowed_set = set(scope.brand_models)
+        all_brands = [b for b in all_brands if b in allowed_set]
+    if not is_unrestricted and not scope.all_cities and scope.survey_locations:
+        allowed_set = set(scope.survey_locations)
+        all_locations = [l for l in all_locations if l in allowed_set]
+
     return {
-        "brands": sorted([b for b in brands if b and b != "Blank"]),
-        "locations": sorted([l for l in locations if l and l != "Blank"]),
+        "brands": sorted([b for b in all_brands if b and b != "Blank"]),
+        "locations": sorted([l for l in all_locations if l and l != "Blank"]),
+        "regions": regions,
+        "countries": countries,
+        "ib_versions": ib_versions,
     }
 
 
@@ -198,9 +248,10 @@ async def get_column_headers(_: User = Depends(get_admin_or_super)):
 @router.get("/{response_id}")
 async def get_single_response(
     response_id: str,
-    _: User = Depends(get_admin_or_super),
+    scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
-    r = await SurveyResponse.get(PydanticObjectId(response_id))
+    query = scoped_user.apply_to_query({"_id": PydanticObjectId(response_id)})
+    r = await SurveyResponse.find_one(query)
     if not r:
         raise HTTPException(status_code=404, detail="Response not found")
     return {
@@ -216,7 +267,7 @@ async def get_single_response(
 async def export_csv(
     file_id: Optional[str] = None,
     brand_model: Optional[str] = None,
-    _: User = Depends(get_admin_or_super),
+    scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
     """Export filtered responses as CSV."""
     query = {}
@@ -225,6 +276,7 @@ async def export_csv(
     if brand_model:
         query["brand_model"] = {"$regex": brand_model, "$options": "i"}
 
+    query = scoped_user.apply_to_query(query)
     responses = await SurveyResponse.find(query).limit(100000).to_list()
 
     async def generate():

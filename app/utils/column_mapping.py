@@ -26,39 +26,44 @@ def index_to_col_letter(index: int) -> str:
 # 33 ISSUES → COLUMN RANGE MAPPING (FIXED)
 # ============================================================
 ISSUE_COLUMN_RANGE_MAPPING = {
+    # ── Unchanged (before FR) ─────────────────────────────────────
     "Brake issues":                {"start": "EP", "end": "EX", "count": 9},
     "Cable issues":                {"start": "EY", "end": "FD", "count": 6},
     "Chain issue":                 {"start": "FE", "end": "FE", "count": 1},
     "Chain case issue":            {"start": "FF", "end": "FF", "count": 1},
     "Clutch issues":               {"start": "FG", "end": "FK", "count": 5},
-    "Electrical issues":           {"start": "FL", "end": "FW", "count": 12},
-    "Engine issues":               {"start": "FX", "end": "GE", "count": 8},
-    "Gear issues":                 {"start": "GF", "end": "GM", "count": 9},
-    "Handle Bar issues":           {"start": "GN", "end": "HO", "count": 28},
-    "Kicker issues":               {"start": "HP", "end": "HQ", "count": 2},
-    "Low Mileage":                 {"start": "HR", "end": "HV", "count": 5},
-    "Low speed":                   {"start": "HW", "end": "HX", "count": 2},
-    "Muffler issues":              {"start": "HY", "end": "IC", "count": 5},
-    "Starting trouble":            {"start": "ID", "end": "IG", "count": 4},
-    "Suspension issues":           {"start": "IH", "end": "JB", "count": 21},
-    "Vehicle noise":               {"start": "JC", "end": "JU", "count": 27},
-    "Vibration":                   {"start": "JV", "end": "KL", "count": 31},
-    "Mirror issues":               {"start": "KM", "end": "KQ", "count": 5},
-    "Wheel/Tyre issues":           {"start": "KR", "end": "ME", "count": 15},
-    "Battery issues":              {"start": "MF", "end": "MI", "count": 4},
-    "Jerking issues":              {"start": "MJ", "end": "MM", "count": 4},
-    "Part not available":          {"start": "MN", "end": "MO", "count": 2},
-    "Pick-up problem":             {"start": "MP", "end": "MZ", "count": 11},
-    "Running off":                 {"start": "NA", "end": "NG", "count": 7},
-    "Throttle/Accelerator issue":  {"start": "NH", "end": "NH", "count": 1},
-    "Vehicle body parts issue":    {"start": "NI", "end": "NU", "count": 13},
-    "Fuel related issue":          {"start": "NV", "end": "NW", "count": 2},
-    "Low Boot space":              {"start": "NX", "end": "NX", "count": 1},
-    "Seat issue":                  {"start": "NY", "end": "NZ", "count": 2},
-    "Vehicle Pulling problem":     {"start": "OA", "end": "OB", "count": 2},
-    "Roof top (soft top) issue":   {"start": "OC", "end": "OE", "count": 3},
-    "Wiper problem":               {"start": "OF", "end": "OG", "count": 2},
-    "Fastener issue":              {"start": "OH", "end": "OH", "count": 1},
+
+    # ── Electrical issues: FL to FY (was FL to FW, now +2 wider) ──
+    "Electrical issues":           {"start": "FL", "end": "FY", "count": 14},
+
+    # ── Everything from Engine onward shifts +2 ───────────────────
+    "Engine issues":               {"start": "FZ", "end": "GG", "count": 8},
+    "Gear issues":                 {"start": "GH", "end": "GO", "count": 9},
+    "Handle Bar issues":           {"start": "GP", "end": "HQ", "count": 28},
+    "Kicker issues":               {"start": "HR", "end": "HS", "count": 2},
+    "Low Mileage":                 {"start": "HT", "end": "HX", "count": 5},
+    "Low speed":                   {"start": "HY", "end": "HZ", "count": 2},
+    "Muffler issues":              {"start": "IA", "end": "IE", "count": 5},
+    "Starting trouble":            {"start": "IF", "end": "II", "count": 4},
+    "Suspension issues":           {"start": "IJ", "end": "JD", "count": 21},
+    "Vehicle noise":               {"start": "JE", "end": "JW", "count": 27},
+    "Vibration":                   {"start": "JX", "end": "KN", "count": 31},
+    "Mirror issues":               {"start": "KO", "end": "KS", "count": 5},
+    "Wheel/Tyre issues":           {"start": "KT", "end": "MG", "count": 15},
+    "Battery issues":              {"start": "MH", "end": "MK", "count": 4},
+    "Jerking issues":              {"start": "ML", "end": "MO", "count": 4},
+    "Part not available":          {"start": "MP", "end": "MQ", "count": 2},
+    "Pick-up problem":             {"start": "MR", "end": "NB", "count": 11},
+    "Running off":                 {"start": "NC", "end": "NI", "count": 7},
+    "Throttle/Accelerator issue":  {"start": "NJ", "end": "NJ", "count": 1},
+    "Vehicle body parts issue":    {"start": "NK", "end": "NW", "count": 13},
+    "Fuel related issue":          {"start": "NX", "end": "NY", "count": 2},
+    "Low Boot space":              {"start": "NZ", "end": "NZ", "count": 1},
+    "Seat issue":                  {"start": "OA", "end": "OB", "count": 2},
+    "Vehicle Pulling problem":     {"start": "OC", "end": "OD", "count": 2},
+    "Roof top (soft top) issue":   {"start": "OE", "end": "OG", "count": 3},
+    "Wiper problem":               {"start": "OH", "end": "OI", "count": 2},
+    "Fastener issue":              {"start": "OJ", "end": "OJ", "count": 1},
 }
 
 # All 33 issues
@@ -106,7 +111,7 @@ COMPLAINT_GROUP_END = "EI"
 COMPLAINT_GROUP_START_IDX = col_letter_to_index("DF")
 COMPLAINT_GROUP_END_IDX = col_letter_to_index("EI")
 
-TOTAL_EXPECTED_COLUMNS = 447
+TOTAL_EXPECTED_COLUMNS = 449
 
 # Load 422 column headers from JSON
 import json

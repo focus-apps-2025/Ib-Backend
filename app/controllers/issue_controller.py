@@ -66,6 +66,7 @@ class IssueController:
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
         search: Optional[str] = None,
+        scoped_user: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """
         Get issue analysis with brand-wise breakdown of sub-issues on the fly.
@@ -91,6 +92,8 @@ class IssueController:
         query = {}
         if file_ids:
             query["file_id"] = {"$in": file_ids}
+        elif region_id or country_id or ib_version_id:
+            query["file_id"] = {"$in": []}
 
         if brand_model:
             query["brand_model"] = {"$regex": brand_model, "$options": "i"}
@@ -113,6 +116,9 @@ class IssueController:
                 {"vin_number": {"$regex": search, "$options": "i"}},
             ]
 
+        if scoped_user:
+            query = scoped_user.apply_to_query(query)
+
         # Fetch matching survey responses
         responses = await SurveyResponse.find(query).to_list()
         if not responses:
@@ -131,6 +137,25 @@ class IssueController:
             if not value:
                 return False
             return not is_junk_value(value)
+
+        # Backfill complaint_groups if they have valid data in the issue column ranges but missed the main checkbox
+        for r in responses:
+            cg = set(r.complaint_groups or [])
+            for iname, range_info in issue_mapping.items():
+                if iname in cg:
+                    continue
+                start_col = range_info.get("start")
+                end_col = range_info.get("end")
+                if start_col and end_col:
+                    start_idx = col_letter_to_index(start_col)
+                    end_idx = col_letter_to_index(end_col)
+                    for col_idx in range(start_idx, end_idx + 1):
+                        col_letter = index_to_col_letter(col_idx)
+                        val = (r.full_data or {}).get(col_letter, "")
+                        if is_valid_complaint(val):
+                            cg.add(iname)
+                            break
+            r.complaint_groups = list(cg)
 
         # Count total complaints per issue
         total_complaints_by_issue = {}
@@ -175,15 +200,21 @@ class IssueController:
         result = []
         total_all_complaints = sum(total_complaints_by_issue.values())
 
-        for iname, range_info in issue_mapping.items():
+        for iname, count in total_complaints_by_issue.items():
             if issue_name and iname.lower() != issue_name.lower():
                 continue
-            if iname not in total_complaints_by_issue:
-                continue
 
+            range_info = issue_mapping.get(iname) or {}
             start_col = range_info.get("start")
             end_col = range_info.get("end")
+            
             if not start_col or not end_col:
+                result.append({
+                    "issue_name": iname,
+                    "total_complaints": count,
+                    "percentage": round(count / total_all_complaints * 100, 2) if total_all_complaints else 0.0,
+                    "sub_issues": []
+                })
                 continue
 
             start_idx = col_letter_to_index(start_col)
@@ -259,7 +290,13 @@ class IssueController:
                                 # Check if this is the current follow-up
                                 if sub_issue_check == sub_issue_name and follow_up_check == fu_name:
                                     # Get the answer value from the column
+                                    import re
                                     answer_value = str(val).strip()
+                                    
+                                    # Normalize spaces around hyphens and fix known typos
+                                    answer_value = re.sub(r'\s*-\s*', '-', answer_value)
+                                    if "90-50" in answer_value or "190-50" in answer_value:
+                                        answer_value = answer_value.replace("190-50", "40-50").replace("90-50", "40-50")
                                     
                                     # Split comma-separated values into separate answers
                                     is_cell_split = "," in answer_value
@@ -350,16 +387,16 @@ class IssueController:
                     "follow_ups": follow_ups_list
                 })
 
+            # Sort sub-issues by total complaints descending
             if sub_issues_list:
-                # Sort sub-issues by total complaints descending
                 sub_issues_list = sorted(sub_issues_list, key=lambda x: -x["total"])
                 
-                result.append({
-                    "issue_name": iname,
-                    "total_complaints": total_complaints_by_issue[iname],
-                    "percentage": round(total_complaints_by_issue[iname] / total_all_complaints * 100, 2) if total_all_complaints else 0.0,
-                    "sub_issues": sub_issues_list
-                })
+            result.append({
+                "issue_name": iname,
+                "total_complaints": total_complaints_by_issue[iname],
+                "percentage": round(total_complaints_by_issue[iname] / total_all_complaints * 100, 2) if total_all_complaints else 0.0,
+                "sub_issues": sub_issues_list
+            })
 
         # Sort results by total_complaints descending
         result = sorted(result, key=lambda x: -x["total_complaints"])
@@ -377,14 +414,20 @@ class IssueController:
 
 
     @staticmethod
-    async def get_top_issues(limit: int = 10, file_id: Optional[str] = None) -> Dict[str, Any]:
+    async def get_top_issues(limit: int = 10, file_id: Optional[str] = None, scoped_user: Optional[Any] = None) -> Dict[str, Any]:
         """
         Get top issues by complaint count.
         """
         query = {}
         if file_id:
             query["file_id"] = PydanticObjectId(file_id)
-            
+        if scoped_user and scoped_user.allowed_file_ids is not None:
+            if "file_id" in query:
+                if query["file_id"] not in scoped_user.allowed_file_ids:
+                    return {"data": []}
+            else:
+                query["file_id"] = {"$in": scoped_user.allowed_file_ids}
+
         analyses = await IssueAnalysis.find(query).to_list()
 
         counts: dict = {}
@@ -398,7 +441,7 @@ class IssueController:
         }
 
     @staticmethod
-    async def get_issue_trend(file_id: Optional[str] = None) -> Dict[str, Any]:
+    async def get_issue_trend(file_id: Optional[str] = None, scoped_user: Optional[Any] = None) -> Dict[str, Any]:
         """
         Get monthly trend data for top 5 issues.
         """
@@ -407,6 +450,9 @@ class IssueController:
         query = {}
         if file_id:
             query["file_id"] = PydanticObjectId(file_id)
+
+        if scoped_user:
+            query = scoped_user.apply_to_query(query)
 
         pipeline = [
             {"$match": query},

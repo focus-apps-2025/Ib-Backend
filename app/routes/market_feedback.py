@@ -20,15 +20,38 @@ class RemarkRequest(BaseModel):
     sub_issue_title: Optional[str] = None
 
 
+from app.middleware.scope import ScopedUser, get_scoped_user
+
+
 @router.get("")
-async def get_all_market_feedback(_: User = Depends(get_current_user)):
-    """Fetch all saved remarks and photo entries from MongoDB."""
+async def get_all_market_feedback(scoped_user: ScopedUser = Depends(get_scoped_user)):
+    """Fetch all saved remarks and photo entries from MongoDB, filtered by user's scope."""
     try:
         items = await MarketFeedback.find_all().to_list()
         remarks: Dict[str, str] = {}
         photos: Dict[str, List[dict]] = {}
 
+        allowed_issues = None
+        if scoped_user.user.role != "super_admin" and scoped_user.allowed_file_ids is not None:
+            if not scoped_user.allowed_file_ids:
+                return {"success": True, "data": {"remarks": {}, "photos": {}}}
+            from app.models.survey_response import SurveyResponse
+            survey_query = scoped_user.apply_to_query({})
+            complaint_groups = await SurveyResponse.distinct("complaint_groups", filter=survey_query)
+            allowed_issues = set(c.lower() for c in complaint_groups if c)
+
         for item in items:
+            if allowed_issues is not None:
+                issue_match = False
+                if item.issue_name and item.issue_name.lower() in allowed_issues:
+                    issue_match = True
+                elif item.remark_key:
+                    rk_lower = item.remark_key.lower()
+                    if any(ai in rk_lower for ai in allowed_issues):
+                        issue_match = True
+                if not issue_match:
+                    continue
+
             if item.remark:
                 remarks[item.remark_key] = item.remark
             if item.photos:

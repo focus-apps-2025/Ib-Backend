@@ -25,9 +25,18 @@ class ReorderRequest(BaseModel):
     ids: List[str]
 
 
+from app.middleware.scope import ScopedUser, get_scoped_user
+
+
 @router.get("")
-async def list_ib_versions(_: User = Depends(get_current_user)):
-    versions = await IBVersion.find_all().sort("+display_order").to_list()
+async def list_ib_versions(scoped_user: ScopedUser = Depends(get_scoped_user)):
+    scope = scoped_user.scope
+    if scoped_user.user.role == "super_admin" or scope is None or scope.all_ib_versions:
+        versions = await IBVersion.find_all().sort("+display_order").to_list()
+    else:
+        allowed = scope.ib_version_ids or []
+        versions = await IBVersion.find({"_id": {"$in": allowed}}).sort("+display_order").to_list() if allowed else []
+
     return {
         "data": [
             {"id": str(v.id), "name": v.name, "display_order": v.display_order,

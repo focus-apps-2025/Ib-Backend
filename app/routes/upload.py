@@ -15,6 +15,7 @@ from app.models.region import Region
 from app.models.country import Country
 from app.models.ib_version import IBVersion
 from app.middleware.auth import get_admin_or_super, get_current_user
+from app.middleware.scope import ScopedUser, get_scoped_user
 from app.config.settings import settings
 
 router = APIRouter(prefix="/upload", tags=["Excel Upload"])
@@ -49,9 +50,13 @@ async def upload_excel(
     region_id: str = Form(...),
     country_id: str = Form(...),
     ib_version_id: str = Form(...),
+    assigned_admin_id: Optional[str] = Form(None),
     file: UploadFile = File(...),
-    current_user: User = Depends(get_admin_or_super),
+    scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
+    # Validate scope permission first
+    scoped_user.assert_upload_allowed(region_id, country_id, ib_version_id)
+
     # Validate IDs
     region = await Region.get(PydanticObjectId(region_id))
     country = await Country.get(PydanticObjectId(country_id))
@@ -86,12 +91,19 @@ async def upload_excel(
     with open(file_path, "wb") as f_out:
         f_out.write(content)
 
+    # Determine assigned_admin_id
+    if scoped_user.user.role == "super_admin":
+        admin_to_assign = PydanticObjectId(assigned_admin_id) if assigned_admin_id else None
+    else:
+        admin_to_assign = scoped_user.user.id
+
     # Create DB record
     upload_record = UploadedFile(
         region_id=PydanticObjectId(region_id),
         country_id=PydanticObjectId(country_id),
         ib_version_id=PydanticObjectId(ib_version_id),
-        uploaded_by=current_user.id,
+        uploaded_by=scoped_user.user.id,
+        assigned_admin_id=admin_to_assign,
         file_name=file.filename,
         file_path=file_path,
         file_size=len(content),
@@ -100,7 +112,7 @@ async def upload_excel(
     await upload_record.insert()
     file_id = str(upload_record.id)
 
-    # Launch processor in a background task (no Celery/Redis needed)
+    # Launch processor in a background task
     from app.jobs.excel_processor_job import process_excel_file_async
     background_tasks.add_task(
         process_excel_file_async,
@@ -124,13 +136,14 @@ async def list_uploads(
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=100),
     status: Optional[str] = None,
-    current_user: User = Depends(get_admin_or_super),
+    scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
     query = {}
-    if current_user.role == "admin":
-        query["uploaded_by"] = current_user.id
     if status:
         query["status"] = status
+
+    # Merge user file scope into query
+    query = scoped_user.apply_to_file_query(query)
 
     skip = (page - 1) * page_size
     total = await UploadedFile.find(query).count()
@@ -156,14 +169,14 @@ async def list_uploads(
         "total": total,
         "page": page,
         "page_size": page_size,
-        "total_pages": (total + page_size - 1) // page_size,
+        "total_pages": (total + page_size - 1) // page_size if total > 0 else 0,
     }
 
 
 @router.get("/{file_id}/progress")
 async def get_upload_progress(
     file_id: str,
-    current_user: User = Depends(get_admin_or_super),
+    scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
     """SSE endpoint — real-time upload progress."""
     async def event_generator() -> AsyncGenerator[str, None]:
@@ -201,10 +214,16 @@ async def get_upload_progress(
 
 
 @router.delete("/{file_id}")
-async def delete_upload(file_id: str, current_user: User = Depends(get_admin_or_super)):
+async def delete_upload(
+    file_id: str,
+    scoped_user: ScopedUser = Depends(get_scoped_user),
+):
     upload = await UploadedFile.get(PydanticObjectId(file_id))
     if not upload:
         raise HTTPException(status_code=404, detail="Upload not found")
+
+    # Reject if outside user scope
+    scoped_user.assert_upload_allowed(upload.region_id, upload.country_id, upload.ib_version_id)
 
     # Delete associated survey responses
     from app.models.survey_response import SurveyResponse

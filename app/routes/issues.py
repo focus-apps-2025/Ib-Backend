@@ -7,6 +7,7 @@ from app.models.issue_analysis import IssueAnalysis
 from app.models.uploaded_file import UploadedFile
 from app.models.issue_mapping import IssueMapping
 from app.middleware.auth import get_admin_or_super
+from app.middleware.scope import ScopedUser, get_scoped_user
 from app.utils.column_mapping import ISSUE_COLUMN_RANGE_MAPPING, get_question_text_for_column
 
 from app.controllers.issue_controller import IssueController
@@ -32,7 +33,7 @@ async def get_issue_analysis(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     search: Optional[str] = None,
-    _: User = Depends(get_admin_or_super),
+    scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
     """
     Get issue analysis with brand-wise breakdown of sub-issues on the fly.
@@ -48,58 +49,30 @@ async def get_issue_analysis(
         date_from=date_from,
         date_to=date_to,
         search=search,
+        scoped_user=scoped_user,
     )
-
 
 
 @router.get("/top")
 async def get_top_issues(
     limit: int = Query(10, ge=1, le=33),
     file_id: Optional[str] = None,
-    _: User = Depends(get_admin_or_super),
+    scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
-    query = {}
-    if file_id:
-        query["file_id"] = PydanticObjectId(file_id)
-    analyses = await IssueAnalysis.find(query).to_list()
-
-    counts: dict = {}
-    for analysis in analyses:
-        for issue in analysis.issues:
-            counts[issue.issue_name] = counts.get(issue.issue_name, 0) + issue.total_complaints
-
-    top = sorted(counts.items(), key=lambda x: -x[1])[:limit]
-    return {
-        "data": [{"issue_name": n, "count": c} for n, c in top]
-    }
+    return await IssueController.get_top_issues(
+        limit=limit,
+        file_id=file_id,
+        scoped_user=scoped_user,
+    )
 
 
 @router.get("/trend")
 async def get_issue_trend(
     file_id: Optional[str] = None,
-    _: User = Depends(get_admin_or_super),
+    scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
     """Return monthly trend data for top 5 issues."""
-    from app.models.survey_response import SurveyResponse
-
-    query = {}
-    if file_id:
-        query["file_id"] = PydanticObjectId(file_id)
-
-    pipeline = [
-        {"$match": query},
-        {"$unwind": "$complaint_groups"},
-        {
-            "$group": {
-                "_id": {
-                    "issue": "$complaint_groups",
-                    "year": {"$year": "$survey_date"},
-                    "month": {"$month": "$survey_date"},
-                },
-                "count": {"$sum": 1},
-            }
-        },
-        {"$sort": {"_id.year": 1, "_id.month": 1}},
-    ]
-    results = await SurveyResponse.aggregate(pipeline).to_list()
-    return {"data": results}
+    return await IssueController.get_issue_trend(
+        file_id=file_id,
+        scoped_user=scoped_user,
+    )

@@ -10,6 +10,7 @@ class UploadedFile(Document):
     country_id: PydanticObjectId
     ib_version_id: PydanticObjectId
     uploaded_by: PydanticObjectId
+    assigned_admin_id: Optional[PydanticObjectId] = None
     file_name: str
     file_path: str
     file_size: Optional[int] = 0
@@ -29,6 +30,7 @@ class UploadedFile(Document):
             IndexModel([("country_id", ASCENDING)]),
             IndexModel([("ib_version_id", ASCENDING)]),
             IndexModel([("uploaded_by", ASCENDING)]),
+            IndexModel([("assigned_admin_id", ASCENDING)]),
             IndexModel([("status", ASCENDING)]),
             IndexModel([("created_at", DESCENDING)]),
         ]
