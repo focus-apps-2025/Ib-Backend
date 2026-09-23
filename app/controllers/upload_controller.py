@@ -135,7 +135,8 @@ class UploadController:
             ib = await IBVersion.get(f.ib_version_id)
             from app.models.user import User as UserModel
             uploader = await UserModel.get(f.uploaded_by)
-            
+            assigned_admin = await UserModel.get(f.assigned_admin_id) if f.assigned_admin_id else None
+
             result.append({
                 "id": str(f.id),
                 "file_name": f.file_name,
@@ -148,6 +149,10 @@ class UploadController:
                 "ib_version_name": ib.name if ib else "",
                 "uploaded_by": str(f.uploaded_by),
                 "uploader_name": uploader.full_name if uploader else "",
+                "assigned_admin_id": str(f.assigned_admin_id) if f.assigned_admin_id else None,
+                "assigned_admin_name": assigned_admin.full_name if assigned_admin else "",
+                "assigned_admin_username": assigned_admin.username if assigned_admin else "",
+                "assigned_admin_email": assigned_admin.email if assigned_admin else "",
                 "total_records": f.total_records,
                 "processed_records": f.processed_records,
                 "status": f.status,

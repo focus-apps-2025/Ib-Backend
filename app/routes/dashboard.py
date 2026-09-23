@@ -2188,9 +2188,51 @@ async def dashboard_analytics(
         {"$match": query},
         {
             "$project": {
-                "city": {"$trim": {"input": {"$ifNull": ["$survey_location", {"$ifNull": ["$full_data.D", ""]}]}}},
-                "brand_raw": {"$trim": {"input": {"$ifNull": ["$brand_model", {"$ifNull": ["$full_data.E", ""]}]}}},
-                "tenure_raw": {"$trim": {"input": {"$ifNull": ["$duration_of_usage", {"$ifNull": ["$full_data.T", ""]}]}}}
+                "city": {
+                    "$trim": {
+                        "input": {
+                            "$ifNull": [
+                                "$survey_location",
+                                {
+                                    "$ifNull": [
+                                        "$full_data.D",
+                                        {"$ifNull": ["$full_data.d", {"$ifNull": ["$full_data.Q1-LOCATION", ""]}]}
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                },
+                "brand_raw": {
+                    "$trim": {
+                        "input": {
+                            "$ifNull": [
+                                "$brand_model",
+                                {
+                                    "$ifNull": [
+                                        "$full_data.E",
+                                        {"$ifNull": ["$full_data.e", {"$ifNull": ["$full_data.Q1-2 MODEL", ""]}]}
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                },
+                "tenure_raw": {
+                    "$trim": {
+                        "input": {
+                            "$ifNull": [
+                                "$duration_of_usage",
+                                {
+                                    "$ifNull": [
+                                        "$full_data.T",
+                                        {"$ifNull": ["$full_data.t", {"$ifNull": ["$full_data.Q1-3 TENURE", ""]}]}
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                }
             }
         },
         {"$match": {"city": {"$ne": ""}}}
@@ -2198,7 +2240,6 @@ async def dashboard_analytics(
 
     sample_size_docs = await SurveyResponse.aggregate(sample_size_pipeline).to_list(length=10000)
 
-    # Extraction Logic for Column T: extract string before '('
     def clean_tenure(val):
         if not val:
             return "3-6 months"
@@ -2207,17 +2248,10 @@ async def dashboard_analytics(
             s = s.split("(")[0].strip()
         return s if s else "3-6 months"
 
-    # Extraction Logic for Column E: Brand / Model
     def norm_brand_group(b_raw):
         if not b_raw:
-            return "TVS HLX125"
-        b_str = str(b_raw).strip()
-        b_upper = b_str.upper()
-        if "BAJAJ" in b_upper:
-            return "Bajaj BM 125 / Bajaj CT 125"
-        if "TVS" in b_upper:
-            return "TVS HLX125"
-        return b_str
+            return BRANDS[0] if BRANDS else "Unknown"
+        return clean_brand_name(b_raw)
 
     ss_counts = defaultdict(lambda: defaultdict(lambda: defaultdict(int)))
     ss_cities_set = set()
@@ -2237,15 +2271,21 @@ async def dashboard_analytics(
         ss_counts[c_name][b_grp][t_clean] += 1
 
     sample_cities = sorted(list(ss_cities_set)) if ss_cities_set else ["Freetown", "Bo", "Kenema", "Makeni"]
-    sample_brands = ["TVS HLX125", "Bajaj BM 125 / Bajaj CT 125"] if set(["TVS HLX125", "Bajaj BM 125 / Bajaj CT 125"]).issubset(ss_brands_set) else (sorted(list(ss_brands_set)) if ss_brands_set else ["TVS HLX125", "Bajaj BM 125 / Bajaj CT 125"])
     
-    # Sort tenures e.g. 3-6 months, 6-12 months
+    # Dynamically match BRANDS from DB query or extracted ss_brands_set
+    ss_brands_list = [b for b in BRANDS if b in ss_brands_set]
+    if not ss_brands_list:
+        ss_brands_list = sorted(list(ss_brands_set)) if ss_brands_set else BRANDS
+    sample_brands = ss_brands_list if ss_brands_list else ["TVS HLX125", "Bajaj BM 125 / Bajaj CT 125"]
+    
     def tenure_sort_key(t):
         if "3" in t:
             return 1
         if "6" in t:
             return 2
-        return 3
+        if "12" in t:
+            return 3
+        return 4
 
     sample_tenures = sorted(list(ss_tenures_set), key=tenure_sort_key) if ss_tenures_set else ["3-6 months", "6-12 months"]
 
