@@ -1186,32 +1186,48 @@ async def get_service_benefits_betterments(
                 "brand_bases": defaultdict(int),
                 "benefits": defaultdict(int),
                 "issues": defaultdict(int),
+                "benefit_value_counts": defaultdict(lambda: defaultdict(int)),
+                "issue_value_counts": defaultdict(lambda: defaultdict(int)),
                 "brand_benefits": defaultdict(lambda: defaultdict(int)),
                 "brand_issues": defaultdict(lambda: defaultdict(int)),
+                "brand_benefit_value_counts": defaultdict(lambda: defaultdict(lambda: defaultdict(int))),
+                "brand_issue_value_counts": defaultdict(lambda: defaultdict(lambda: defaultdict(int))),
             },
             "promoter": {
                 "base": 0,
                 "brand_bases": defaultdict(int),
                 "benefits": defaultdict(int),
                 "issues": defaultdict(int),
+                "benefit_value_counts": defaultdict(lambda: defaultdict(int)),
+                "issue_value_counts": defaultdict(lambda: defaultdict(int)),
                 "brand_benefits": defaultdict(lambda: defaultdict(int)),
                 "brand_issues": defaultdict(lambda: defaultdict(int)),
+                "brand_benefit_value_counts": defaultdict(lambda: defaultdict(lambda: defaultdict(int))),
+                "brand_issue_value_counts": defaultdict(lambda: defaultdict(lambda: defaultdict(int))),
             },
             "passive": {
                 "base": 0,
                 "brand_bases": defaultdict(int),
                 "benefits": defaultdict(int),
                 "issues": defaultdict(int),
+                "benefit_value_counts": defaultdict(lambda: defaultdict(int)),
+                "issue_value_counts": defaultdict(lambda: defaultdict(int)),
                 "brand_benefits": defaultdict(lambda: defaultdict(int)),
                 "brand_issues": defaultdict(lambda: defaultdict(int)),
+                "brand_benefit_value_counts": defaultdict(lambda: defaultdict(lambda: defaultdict(int))),
+                "brand_issue_value_counts": defaultdict(lambda: defaultdict(lambda: defaultdict(int))),
             },
             "detractor": {
                 "base": 0,
                 "brand_bases": defaultdict(int),
                 "benefits": defaultdict(int),
                 "issues": defaultdict(int),
+                "benefit_value_counts": defaultdict(lambda: defaultdict(int)),
+                "issue_value_counts": defaultdict(lambda: defaultdict(int)),
                 "brand_benefits": defaultdict(lambda: defaultdict(int)),
                 "brand_issues": defaultdict(lambda: defaultdict(int)),
+                "brand_benefit_value_counts": defaultdict(lambda: defaultdict(lambda: defaultdict(int))),
+                "brand_issue_value_counts": defaultdict(lambda: defaultdict(lambda: defaultdict(int))),
             },
         }
 
@@ -1251,11 +1267,16 @@ async def get_service_benefits_betterments(
                             val = v
                             break
             if val and str(val).strip() and str(val).strip().lower() not in ("nan", "none", "0", "false", "no", "-"):
+                val_str = str(val).strip()
                 counted_benefit_topics.add(topic)
                 sec["overall"]["benefits"][topic] += 1
+                sec["overall"]["benefit_value_counts"][topic][val_str] += 1
                 sec["overall"]["brand_benefits"][b][topic] += 1
+                sec["overall"]["brand_benefit_value_counts"][b][topic][val_str] += 1
                 sec[nps_cat]["benefits"][topic] += 1
+                sec[nps_cat]["benefit_value_counts"][topic][val_str] += 1
                 sec[nps_cat]["brand_benefits"][b][topic] += 1
+                sec[nps_cat]["brand_benefit_value_counts"][b][topic][val_str] += 1
 
         counted_issue_topics = set()
         for col in ov_pj_cols:
@@ -1271,40 +1292,84 @@ async def get_service_benefits_betterments(
                             val = v
                             break
             if val and str(val).strip() and str(val).strip().lower() not in ("nan", "none", "0", "false", "no", "-"):
+                val_str = str(val).strip()
                 counted_issue_topics.add(topic)
                 sec["overall"]["issues"][topic] += 1
+                sec["overall"]["issue_value_counts"][topic][val_str] += 1
                 sec["overall"]["brand_issues"][b][topic] += 1
+                sec["overall"]["brand_issue_value_counts"][b][topic][val_str] += 1
                 sec[nps_cat]["issues"][topic] += 1
+                sec[nps_cat]["issue_value_counts"][topic][val_str] += 1
                 sec[nps_cat]["brand_issues"][b][topic] += 1
+                sec[nps_cat]["brand_issue_value_counts"][b][topic][val_str] += 1
 
     def format_sub_analysis(sub_data: dict) -> dict:
         base = sub_data.get("base", 0)
         brand_bases = sub_data.get("brand_bases", {})
 
-        top_b = [
-            {"topic": k, "count": v, "percentage": round((v / base * 100), 1) if base > 0 else 0}
-            for k, v in sorted(sub_data["benefits"].items(), key=lambda x: x[1], reverse=True)[:25]
-        ]
-        top_i = [
-            {"topic": k, "count": v, "percentage": round((v / base * 100), 1) if base > 0 else 0}
-            for k, v in sorted(sub_data["issues"].items(), key=lambda x: x[1], reverse=True)[:25]
-        ]
+        top_b = []
+        for k, v in sorted(sub_data["benefits"].items(), key=lambda x: x[1], reverse=True)[:25]:
+            vc_dict = sub_data.get("benefit_value_counts", {}).get(k, {})
+            vc_list = [
+                {"value": vk, "count": vv, "percentage": round((vv / v * 100), 1) if v > 0 else 0}
+                for vk, vv in sorted(vc_dict.items(), key=lambda x: x[1], reverse=True)
+            ]
+            top_b.append({
+                "topic": k,
+                "count": v,
+                "percentage": round((v / base * 100), 1) if base > 0 else 0,
+                "value_counts": vc_list
+            })
+
+        top_i = []
+        for k, v in sorted(sub_data["issues"].items(), key=lambda x: x[1], reverse=True)[:25]:
+            vc_dict = sub_data.get("issue_value_counts", {}).get(k, {})
+            vc_list = [
+                {"value": vk, "count": vv, "percentage": round((vv / v * 100), 1) if v > 0 else 0}
+                for vk, vv in sorted(vc_dict.items(), key=lambda x: x[1], reverse=True)
+            ]
+            top_i.append({
+                "topic": k,
+                "count": v,
+                "percentage": round((v / base * 100), 1) if base > 0 else 0,
+                "value_counts": vc_list
+            })
         
         brand_b = {}
         for brand, topic_counts in sub_data["brand_benefits"].items():
             b_base = brand_bases.get(brand, 0)
-            brand_b[brand] = [
-                {"topic": k, "count": v, "percentage": round((v / b_base * 100), 1) if b_base > 0 else 0}
-                for k, v in sorted(topic_counts.items(), key=lambda x: x[1], reverse=True)[:25]
-            ]
+            brand_b_list = []
+            for k, v in sorted(topic_counts.items(), key=lambda x: x[1], reverse=True)[:25]:
+                vc_dict = sub_data.get("brand_benefit_value_counts", {}).get(brand, {}).get(k, {})
+                vc_list = [
+                    {"value": vk, "count": vv, "percentage": round((vv / v * 100), 1) if v > 0 else 0}
+                    for vk, vv in sorted(vc_dict.items(), key=lambda x: x[1], reverse=True)
+                ]
+                brand_b_list.append({
+                    "topic": k,
+                    "count": v,
+                    "percentage": round((v / b_base * 100), 1) if b_base > 0 else 0,
+                    "value_counts": vc_list
+                })
+            brand_b[brand] = brand_b_list
             
         brand_i = {}
         for brand, topic_counts in sub_data["brand_issues"].items():
             b_base = brand_bases.get(brand, 0)
-            brand_i[brand] = [
-                {"topic": k, "count": v, "percentage": round((v / b_base * 100), 1) if b_base > 0 else 0}
-                for k, v in sorted(topic_counts.items(), key=lambda x: x[1], reverse=True)[:25]
-            ]
+            brand_i_list = []
+            for k, v in sorted(topic_counts.items(), key=lambda x: x[1], reverse=True)[:25]:
+                vc_dict = sub_data.get("brand_issue_value_counts", {}).get(brand, {}).get(k, {})
+                vc_list = [
+                    {"value": vk, "count": vv, "percentage": round((vv / v * 100), 1) if v > 0 else 0}
+                    for vk, vv in sorted(vc_dict.items(), key=lambda x: x[1], reverse=True)
+                ]
+                brand_i_list.append({
+                    "topic": k,
+                    "count": v,
+                    "percentage": round((v / b_base * 100), 1) if b_base > 0 else 0,
+                    "value_counts": vc_list
+                })
+            brand_i[brand] = brand_i_list
 
         return {
             "base": base,
@@ -2363,19 +2428,7 @@ async def dashboard_analytics(
     def normalize_usage(val):
         if not val:
             return "Others"
-        v = str(val).strip()
-        vl = v.lower()
-        if "taxi" in vl or "commercial" in vl or "passenger" in vl or "okada" in vl:
-            return "Commercial / Taxi"
-        if "personal" in vl or "private" in vl or "family" in vl:
-            return "Personal Transport"
-        if "business" in vl or "work" in vl or "office" in vl:
-            return "Business"
-        if "delivery" in vl or "goods" in vl or "cargo" in vl:
-            return "Goods Delivery"
-        if "rental" in vl or "lease" in vl:
-            return "Rental / Lease"
-        return v.title()
+        return str(val).strip()
 
     usage_counts = {b: defaultdict(int) for b in BRANDS}
     usage_totals_overall = defaultdict(int)

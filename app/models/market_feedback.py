@@ -18,6 +18,7 @@ class MarketFeedback(Document):
     issue_name: Optional[str] = None
     sub_issue_title: Optional[str] = None
     remark: Optional[str] = ""
+    content: Optional[str] = ""
     photos: List[PhotoItemSchema] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)

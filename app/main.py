@@ -28,10 +28,23 @@ async def lifespan(app: FastAPI):
     # Create uploads directory
     Path(settings.UPLOAD_DIR).mkdir(exist_ok=True)
 
-    # Seed initial data if needed
+        # Seed initial data only if the database is empty
     try:
+        from app.config.database import get_database
         from app.utils.seeder import seed_initial_data
-        await seed_initial_data()
+
+        db = get_database()
+
+        # Check for any existing "core" collection — pick one that the seeder populates
+        # (adjust the collection name to whichever your seeder actually writes to)
+        existing = await db.regions.find_one({})
+
+        if existing:
+            logger.info("📦 Database already seeded — skipping seeder.")
+        else:
+            logger.info("🌱 Empty database detected — running seeder...")
+            await seed_initial_data()
+            logger.info("✅ Seeder completed.")
     except Exception as e:
         logger.warning(f"Seeder warning: {e}")
 

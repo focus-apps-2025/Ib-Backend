@@ -20,21 +20,29 @@ class RemarkRequest(BaseModel):
     sub_issue_title: Optional[str] = None
 
 
+class ContentRequest(BaseModel):
+    remark_key: str
+    content: str
+    issue_name: Optional[str] = None
+    sub_issue_title: Optional[str] = None
+
+
 from app.middleware.scope import ScopedUser, get_scoped_user
 
 
 @router.get("")
 async def get_all_market_feedback(scoped_user: ScopedUser = Depends(get_scoped_user)):
-    """Fetch all saved remarks and photo entries from MongoDB, filtered by user's scope."""
+    """Fetch all saved remarks, custom content, and photo entries from MongoDB, filtered by user's scope."""
     try:
         items = await MarketFeedback.find_all().to_list()
         remarks: Dict[str, str] = {}
+        contents: Dict[str, str] = {}
         photos: Dict[str, List[dict]] = {}
 
         allowed_issues = None
         if scoped_user.user.role != "super_admin" and scoped_user.allowed_file_ids is not None:
             if not scoped_user.allowed_file_ids:
-                return {"success": True, "data": {"remarks": {}, "photos": {}}}
+                return {"success": True, "data": {"remarks": {}, "photos": {}, "contents": {}}}
             from app.models.survey_response import SurveyResponse
             survey_query = scoped_user.apply_to_query({})
             complaint_groups = await SurveyResponse.distinct("complaint_groups", filter=survey_query)
@@ -54,6 +62,8 @@ async def get_all_market_feedback(scoped_user: ScopedUser = Depends(get_scoped_u
 
             if item.remark:
                 remarks[item.remark_key] = item.remark
+            if getattr(item, "content", None):
+                contents[item.remark_key] = item.content
             if item.photos:
                 photos[item.remark_key] = [p.dict() for p in item.photos]
 
@@ -62,6 +72,7 @@ async def get_all_market_feedback(scoped_user: ScopedUser = Depends(get_scoped_u
             "data": {
                 "remarks": remarks,
                 "photos": photos,
+                "contents": contents,
             }
         }
     except Exception as e:
@@ -90,6 +101,7 @@ async def save_remark(payload: RemarkRequest, _: User = Depends(get_admin_or_sup
                 issue_name=payload.issue_name,
                 sub_issue_title=payload.sub_issue_title,
                 remark=payload.remark,
+                content="",
                 photos=[],
                 created_at=now,
                 updated_at=now,
@@ -105,6 +117,46 @@ async def save_remark(payload: RemarkRequest, _: User = Depends(get_admin_or_sup
         }
     except Exception as e:
         logger.error(f"Error saving remark for {payload.remark_key}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/content")
+async def save_content(payload: ContentRequest, _: User = Depends(get_admin_or_super)):
+    """Save or update custom summary content for an issue sub-item."""
+    try:
+        doc = await MarketFeedback.find_one(MarketFeedback.remark_key == payload.remark_key)
+        now = datetime.utcnow()
+
+        if doc:
+            doc.content = payload.content
+            doc.updated_at = now
+            if payload.issue_name:
+                doc.issue_name = payload.issue_name
+            if payload.sub_issue_title:
+                doc.sub_issue_title = payload.sub_issue_title
+            await doc.save()
+        else:
+            doc = MarketFeedback(
+                remark_key=payload.remark_key,
+                issue_name=payload.issue_name,
+                sub_issue_title=payload.sub_issue_title,
+                remark="",
+                content=payload.content,
+                photos=[],
+                created_at=now,
+                updated_at=now,
+            )
+            await doc.insert()
+
+        return {
+            "success": True,
+            "data": {
+                "remark_key": doc.remark_key,
+                "content": doc.content,
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error saving content for {payload.remark_key}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
