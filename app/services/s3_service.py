@@ -30,20 +30,41 @@ class S3Service:
         else:
             self.client = None
             logger.warning("S3Service client not initialized (missing AWS credentials or boto3).")
-
+    
     def _get_public_url(self, key: str) -> str:
         clean_key = key.lstrip("/")
-        # Remove any duplicate market_feedback/ prefixes
+
         while "market_feedback/market_feedback/" in clean_key:
-            clean_key = clean_key.replace("market_feedback/market_feedback/", "market_feedback/")
-        
-        # CloudFront has Origin Path set to /market_feedback, so URL path must be /<filename>
-        url_filename = clean_key[len("market_feedback/"):] if clean_key.startswith("market_feedback/") else clean_key
+            clean_key = clean_key.replace(
+                "market_feedback/market_feedback/",
+                "market_feedback/"
+            )
+
+        url_filename = clean_key
 
         if self.cloudfront_domain:
-            domain = self.cloudfront_domain.replace("https://", "").replace("http://", "").rstrip("/")
+            domain = (
+                self.cloudfront_domain
+                .replace("https://", "")
+                .replace("http://", "")
+                .rstrip("/")
+            )
             return f"https://{domain}/{url_filename}"
-        return f"https://{self.bucket}.s3.{self.region}.amazonaws.com/market_feedback/{url_filename}"
+
+        return f"https://{self.bucket}.s3.{self.region}.amazonaws.com/{url_filename}"
+
+    # def _get_public_url(self, key: str) -> str:
+    #     clean_key = key.lstrip("/")
+    #     # Remove any duplicate market_feedback/ prefixes
+    #     while "market_feedback/market_feedback/" in clean_key:
+    #         clean_key = clean_key.replace("market_feedback/market_feedback/", "market_feedback/")
+        
+    #     # CloudFront has Origin Path set to /market_feedback, so URL path must be /<filename>
+    #     url_filename = clean_key
+    #     if self.cloudfront_domain:
+    #         domain = self.cloudfront_domain.replace("https://", "").replace("http://", "").rstrip("/")
+    #         return f"https://{domain}/{url_filename}"
+    #     return f"https://{self.bucket}.s3.{self.region}.amazonaws.com/market_feedback/{url_filename}"
 
     def upload_file_sync(
         self,
