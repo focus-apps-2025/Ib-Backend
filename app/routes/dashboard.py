@@ -767,7 +767,6 @@ async def get_service_frequency(
         }
     }
 
-
 @router.get("/service-nps")
 async def get_service_nps(
     file_id: Optional[str] = None,
@@ -785,7 +784,10 @@ async def get_service_nps(
     Get Service NPS Analysis for:
     - Column BN: Workshop Type ("Authorized Workshop" vs "PGM (Private Garage Mechanic)")
     - Column BR: Recommendation ("Yes" vs "No")
-    - Column BS: NPS Score (0-10 scale: 9-10 Promoters, 7-8 Passives, 0-6 Detractors)
+    - Column BS: NPS Score for AUTHORIZED (0-10 scale: 9-10 Promoters, 7-8 Passives, 0-6 Detractors)
+    - Column DB: NPS Score for PGM ("B2. How would you rate the quality of
+      Authorized service center?") — accepts numeric 0-10 and qualitative
+      values ("Yes"/"Best" → promoter, "average" → passive, "No"/"worst" → detractor)
     Returns separate metrics & brand breakdowns for Authorized Workshop and PGM.
     """
     from app.models.survey_response import SurveyResponse
@@ -793,8 +795,9 @@ async def get_service_nps(
     import re
 
     query = await _build_full_query(
-        file_id, region_id, country_id, ib_version_id, brand_model, survey_location, date_from, date_to, search
-    , scoped_user=scoped_user)
+        file_id, region_id, country_id, ib_version_id, brand_model,
+        survey_location, date_from, date_to, search, scoped_user=scoped_user
+    )
 
     pipeline = [
         {"$match": query},
@@ -816,10 +819,19 @@ async def get_service_nps(
                         "$full_data.A1. Will you recommend / tell / advise your friends or family members for servicing their vehicle at Authorized Service workshop / Authorized Dealer?"
                     ]
                 },
+                # Column BS — used for AUTHORIZED NPS
                 "nps_val": {
                     "$ifNull": [
                         "$service_nps_score",
                         "$full_data.BS"
+                    ]
+                },
+                # Column DB — used for PGM NPS
+                "pgm_quality_val": {
+                    "$ifNull": [
+                        "$service_pgm_quality",
+                        "$full_data.DB",
+                        "$full_data.B2. How would you rate the quality of Authorized service center? (Choose any score from 1 - 10, \"1 means worst, 10 means best\")"
                     ]
                 }
             }
@@ -839,6 +851,7 @@ async def get_service_nps(
             return "pgm"
         return None
 
+    # ── existing parser (numeric 0-10 + yes/maybe/no) for AUTHORIZED (BS) ──
     def parse_nps_category(score_val: Any, nps_field: Any) -> Optional[str]:
         if score_val is not None:
             try:
@@ -851,7 +864,7 @@ async def get_service_nps(
                     return "detractor"
             except (ValueError, TypeError):
                 pass
-            
+
             s_str = str(score_val).strip().lower()
             if s_str in ("yes", "promoter", "definitely recommend", "1"):
                 return "promoter"
@@ -871,6 +884,41 @@ async def get_service_nps(
                     return "detractor"
             except (ValueError, TypeError):
                 pass
+
+        return None
+
+    # ── NEW parser for PGM (column DB) ──
+    def parse_db_nps_category(val: Any) -> Optional[str]:
+        """Map column DB ('B2. How would you rate the quality of Authorized
+        service center?') into NPS categories. Handles numeric 0-10 and
+        qualitative words."""
+        if val is None:
+            return None
+        s = str(val).strip().lower()
+        if not s or s in ("blank", "nan", "none", "null", "-", "...."):
+            return None
+        if re.match(r"^submit\s?form", s):
+            return None
+
+        # Numeric path
+        try:
+            num = float(s)
+            if 9.0 <= num <= 10.0:
+                return "promoter"
+            if 7.0 <= num <= 8.99:
+                return "passive"
+            if 0.0 <= num <= 6.99:
+                return "detractor"
+        except (ValueError, TypeError):
+            pass
+
+        # Qualitative word path
+        if s in ("yes", "best", "excellent", "very good", "good"):
+            return "promoter"
+        if s in ("average", "ok", "okay", "fine", "neutral"):
+            return "passive"
+        if s in ("no", "worst", "bad", "poor", "very bad"):
+            return "detractor"
 
         return None
 
@@ -941,13 +989,24 @@ async def get_service_nps(
         grp["total"] += 1
         grp["brands"][b]["total"] += 1
 
-        cat = parse_nps_category(r.get("nps_val"), r.get("nps_score_field"))
+        # ── NPS source column depends on workshop type ──
+        if w_type == "pgm":
+            cat = parse_db_nps_category(r.get("pgm_quality_val"))       # column DB
+        else:
+            cat = parse_nps_category(r.get("nps_val"), r.get("nps_score_field"))  # column BS
+
         rec = parse_recommend(r.get("recommend_val"), cat)
         if rec:
             grp["recommend"][rec] += 1
             grp["brands"][b]["recommend"][rec] += 1
 
-        num_score = get_numeric_score(r.get("nps_val"), r.get("nps_score_field"), cat)
+        # numeric score: only trust BS for authorized; for PGM fall back to
+        # the synthetic 9.5/7.5/3.0 average via cat_val
+        if w_type == "pgm":
+            num_score = get_numeric_score(None, None, cat)
+        else:
+            num_score = get_numeric_score(r.get("nps_val"), r.get("nps_score_field"), cat)
+
         if num_score is not None:
             grp["scores"].append(num_score)
             grp["brands"][b]["scores"].append(num_score)
@@ -1044,8 +1103,7 @@ async def get_service_nps(
         "authorized": format_group_result(groups["authorized"]),
         "pgm": format_group_result(groups["pgm"])
     }
-
-
+    
 @router.get("/service-benefits-betterments")
 async def get_service_benefits_betterments(
     file_id: Optional[str] = None,

@@ -266,3 +266,34 @@ async def delete_photo(
     except Exception as e:
         logger.error(f"Error deleting photo {photo_id} from {remark_key}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/proxy-image")
+async def proxy_image(url: str):
+    """Proxy an image from S3/CloudFront to bypass CORS restrictions in browser PPT export."""
+    if not url or not (url.startswith("http://") or url.startswith("https://")):
+        raise HTTPException(status_code=400, detail="Invalid or missing URL parameter")
+
+    try:
+        import httpx
+        async with httpx.AsyncClient(follow_redirects=True, timeout=10.0) as client:
+            resp = await client.get(url)
+            if resp.status_code != 200:
+                raise HTTPException(status_code=resp.status_code, detail=f"Upstream returned {resp.status_code}")
+            
+            content_type = resp.headers.get("content-type", "image/jpeg")
+            from fastapi.responses import Response
+            return Response(
+                content=resp.content,
+                media_type=content_type,
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Cache-Control": "public, max-age=86400",
+                }
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error proxying image {url}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
