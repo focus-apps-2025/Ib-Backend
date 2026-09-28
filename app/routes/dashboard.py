@@ -5,6 +5,7 @@ from typing import Optional, Any, List, Dict
 from app.models.user import User
 from app.middleware.auth import get_admin_or_super
 from app.middleware.scope import ScopedUser, get_scoped_user
+from app.utils.query_utils import id_match, text_match
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
@@ -30,12 +31,15 @@ async def dashboard_stats(
     locations = await SurveyResponse.distinct("survey_location", filter=query if query else None)
 
     file_query = {"status": "completed"}
-    if region_id:
-        file_query["region_id"] = PydanticObjectId(region_id)
-    if country_id:
-        file_query["country_id"] = PydanticObjectId(country_id)
-    if ib_version_id:
-        file_query["ib_version_id"] = PydanticObjectId(ib_version_id)
+    r_match = id_match(region_id)
+    if r_match is not None:
+        file_query["region_id"] = r_match
+    c_match = id_match(country_id)
+    if c_match is not None:
+        file_query["country_id"] = c_match
+    ib_match = id_match(ib_version_id)
+    if ib_match is not None:
+        file_query["ib_version_id"] = ib_match
     file_query = scoped_user.apply_to_file_query(file_query)
     total_uploads = await UploadedFile.find(file_query).count()
 
@@ -165,12 +169,15 @@ async def _build_file_query(
         file_ids = [PydanticObjectId(file_id)]
     elif region_id or country_id or ib_version_id:
         file_query = {}
-        if region_id:
-            file_query["region_id"] = PydanticObjectId(region_id)
-        if country_id:
-            file_query["country_id"] = PydanticObjectId(country_id)
-        if ib_version_id:
-            file_query["ib_version_id"] = PydanticObjectId(ib_version_id)
+        r_match = id_match(region_id)
+        if r_match is not None:
+            file_query["region_id"] = r_match
+        c_match = id_match(country_id)
+        if c_match is not None:
+            file_query["country_id"] = c_match
+        ib_match = id_match(ib_version_id)
+        if ib_match is not None:
+            file_query["ib_version_id"] = ib_match
         if scoped_user:
             file_query = scoped_user.apply_to_file_query(file_query)
         files = await UploadedFile.find({**file_query, "status": "completed"}).to_list()
@@ -201,10 +208,14 @@ async def _build_full_query(
     """Build full MongoDB query incorporating file_id, brand, location, dates, search, and scoped_user."""
     from app.utils.datetime_utils import parse_date_filter
     query = await _build_file_query(file_id, region_id, country_id, ib_version_id, scoped_user)
+    brand_match = None
     if brand_model and brand_model != "All Brands":
-        query["brand_model"] = {"$regex": f"^{re.escape(brand_model)}$", "$options": "i"}
-    if survey_location:
-        query["survey_location"] = {"$regex": survey_location, "$options": "i"}
+        brand_match = text_match(brand_model, exact=True)
+    if brand_match is not None:
+        query["brand_model"] = brand_match
+    location_match = text_match(survey_location)
+    if location_match is not None:
+        query["survey_location"] = location_match
     if date_from:
         parsed_from = parse_date_filter(date_from)
         if parsed_from:
@@ -2992,12 +3003,15 @@ async def get_ib_summary_table(
     , scoped_user=scoped_user)
 
     file_filter = {"status": "completed"}
-    if region_id:
-        file_filter["region_id"] = PydanticObjectId(region_id)
-    if country_id:
-        file_filter["country_id"] = PydanticObjectId(country_id)
-    if ib_version_id:
-        file_filter["ib_version_id"] = PydanticObjectId(ib_version_id)
+    r_match = id_match(region_id)
+    if r_match is not None:
+        file_filter["region_id"] = r_match
+    c_match = id_match(country_id)
+    if c_match is not None:
+        file_filter["country_id"] = c_match
+    ib_match = id_match(ib_version_id)
+    if ib_match is not None:
+        file_filter["ib_version_id"] = ib_match
         
     completed_files = await UploadedFile.find(file_filter).to_list()
     file_to_ib = {f.id: str(f.ib_version_id) if f.ib_version_id else "default" for f in completed_files}

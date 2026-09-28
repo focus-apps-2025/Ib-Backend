@@ -10,6 +10,7 @@ from app.models.issue_analysis import IssueAnalysis
 from app.models.uploaded_file import UploadedFile
 from app.models.issue_mapping import IssueMapping
 from app.utils.column_mapping import ISSUE_COLUMN_RANGE_MAPPING, get_question_text_for_column
+from app.utils.query_utils import id_match, text_match
 from app.utils.datetime_utils import parse_date_filter
 
 
@@ -80,12 +81,15 @@ class IssueController:
             file_ids = [PydanticObjectId(file_id)]
         elif region_id or country_id or ib_version_id:
             file_query = {"status": "completed"}
-            if region_id:
-                file_query["region_id"] = PydanticObjectId(region_id)
-            if country_id:
-                file_query["country_id"] = PydanticObjectId(country_id)
-            if ib_version_id:
-                file_query["ib_version_id"] = PydanticObjectId(ib_version_id)
+            r_match = id_match(region_id)
+            if r_match is not None:
+                file_query["region_id"] = r_match
+            c_match = id_match(country_id)
+            if c_match is not None:
+                file_query["country_id"] = c_match
+            ib_match = id_match(ib_version_id)
+            if ib_match is not None:
+                file_query["ib_version_id"] = ib_match
             files = await UploadedFile.find(file_query).to_list()
             file_ids = [f.id for f in files]
 
@@ -95,10 +99,12 @@ class IssueController:
         elif region_id or country_id or ib_version_id:
             query["file_id"] = {"$in": []}
 
-        if brand_model:
-            query["brand_model"] = {"$regex": brand_model, "$options": "i"}
-        if survey_location:
-            query["survey_location"] = {"$regex": survey_location, "$options": "i"}
+        brand_match = text_match(brand_model)
+        if brand_match is not None:
+            query["brand_model"] = brand_match
+        location_match = text_match(survey_location)
+        if location_match is not None:
+            query["survey_location"] = location_match
 
         if date_from or date_to:
             date_filter = {}
@@ -125,6 +131,16 @@ class IssueController:
             return {"data": [], "summary": {}, "message": "No analysis data found"}
 
         issue_mapping = await get_issue_column_range_mapping()
+        COLUMN_SUBISSUE_OVERRIDES = {
+            # Seat issue: OA + OB → single "Seat issue" entry
+            "OA": ("Seat issue", ""),
+            "OB": ("Seat issue", ""),
+        }
+
+        # Which columns belong to the same merged sub-issue (so we only count once per respondent)
+        MERGED_COLUMN_GROUPS = [
+            {"OA", "OB"},   # Seat issue
+        ]
 
         from app.services.excel_processor import is_junk_value
 
@@ -230,26 +246,46 @@ class IssueController:
                 full_data = r.full_data or {}
 
                 # Collect valid complaints in the issue's column range
+                seen_merged_groups = set()
+
                 for col_idx in range(start_idx, end_idx + 1):
                     col_letter = index_to_col_letter(col_idx)
                     val = full_data.get(col_letter, "")
-                    if is_valid_complaint(val):
+                    if not is_valid_complaint(val):
+                        continue
+
+                    # ── Apply column override / merge logic ──
+                    if col_letter in COLUMN_SUBISSUE_OVERRIDES:
+                        sub_issue, follow_up = COLUMN_SUBISSUE_OVERRIDES[col_letter]
+                    else:
                         question_text = get_question_text_for_column(col_letter)
                         sub_issue, follow_up = parse_column_name(question_text)
+
+                    # If this column belongs to a merged group, only count the group once per respondent
+                    merged_group_key = None
+                    for grp in MERGED_COLUMN_GROUPS:
+                        if col_letter in grp:
+                            merged_group_key = frozenset(grp)
+                            break
+
+                    if merged_group_key is not None:
+                        if merged_group_key in seen_merged_groups:
+                            continue  # already counted this merged group for this respondent
+                        seen_merged_groups.add(merged_group_key)
                         
-                        if sub_issue not in sub_issue_data:
-                            sub_issue_data[sub_issue] = {
-                                "brands": {},
-                                "follow_ups": {},
-                                "has_follow_ups": bool(follow_up)
-                            }
+                    if sub_issue not in sub_issue_data:
+                        sub_issue_data[sub_issue] = {
+                            "brands": {},
+                            "follow_ups": {},
+                            "has_follow_ups": bool(follow_up)
+                        }
                         
-                        sub_issue_data[sub_issue]["brands"][brand_name] = sub_issue_data[sub_issue]["brands"].get(brand_name, 0) + 1
+                    sub_issue_data[sub_issue]["brands"][brand_name] = sub_issue_data[sub_issue]["brands"].get(brand_name, 0) + 1
                         
-                        if follow_up:
-                            if follow_up not in sub_issue_data[sub_issue]["follow_ups"]:
-                                sub_issue_data[sub_issue]["follow_ups"][follow_up] = {}
-                            sub_issue_data[sub_issue]["follow_ups"][follow_up][brand_name] = sub_issue_data[sub_issue]["follow_ups"][follow_up].get(brand_name, 0) + 1
+                    if follow_up:
+                        if follow_up not in sub_issue_data[sub_issue]["follow_ups"]:
+                            sub_issue_data[sub_issue]["follow_ups"][follow_up] = {}
+                        sub_issue_data[sub_issue]["follow_ups"][follow_up][brand_name] = sub_issue_data[sub_issue]["follow_ups"][follow_up].get(brand_name, 0) + 1
 
             sub_issues_list = []
             for sub_issue_name, sub_data in sub_issue_data.items():

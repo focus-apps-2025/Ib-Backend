@@ -8,6 +8,7 @@ from loguru import logger
 from app.models.survey_response import SurveyResponse
 from app.models.uploaded_file import UploadedFile
 from app.models.issue_analysis import IssueAnalysis
+from app.utils.query_utils import id_match
 
 
 class DashboardController:
@@ -25,10 +26,14 @@ class DashboardController:
         if file_id:
             file_ids = [PydanticObjectId(file_id)]
         elif region_id:
-            files = await UploadedFile.find(
-                {"region_id": PydanticObjectId(region_id), "status": "completed"}
-            ).to_list()
-            file_ids = [f.id for f in files]
+            r_match = id_match(region_id)
+            if r_match is None:
+                file_ids = []
+            else:
+                files = await UploadedFile.find(
+                    {"region_id": r_match, "status": "completed"}
+                ).to_list()
+                file_ids = [f.id for f in files]
 
         query = {}
         if file_ids:

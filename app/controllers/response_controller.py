@@ -8,6 +8,7 @@ from loguru import logger
 
 from app.models.survey_response import SurveyResponse
 from app.models.uploaded_file import UploadedFile
+from app.utils.query_utils import id_match, text_match
 from app.utils.datetime_utils import parse_date_filter
 
 
@@ -41,12 +42,15 @@ class ResponseController:
             file_ids = [PydanticObjectId(file_id)]
         elif region_id or country_id or ib_version_id:
             file_query = {}
-            if region_id:
-                file_query["region_id"] = PydanticObjectId(region_id)
-            if country_id:
-                file_query["country_id"] = PydanticObjectId(country_id)
-            if ib_version_id:
-                file_query["ib_version_id"] = PydanticObjectId(ib_version_id)
+            r_match = id_match(region_id)
+            if r_match is not None:
+                file_query["region_id"] = r_match
+            c_match = id_match(country_id)
+            if c_match is not None:
+                file_query["country_id"] = c_match
+            ib_match = id_match(ib_version_id)
+            if ib_match is not None:
+                file_query["ib_version_id"] = ib_match
             files = await UploadedFile.find(
                 {**file_query, "status": "completed"}
             ).to_list()
@@ -55,10 +59,12 @@ class ResponseController:
         if file_ids:
             query["file_id"] = {"$in": file_ids}
 
-        if brand_model:
-            query["brand_model"] = {"$regex": brand_model, "$options": "i"}
-        if survey_location:
-            query["survey_location"] = {"$regex": survey_location, "$options": "i"}
+        brand_match = text_match(brand_model)
+        if brand_match is not None:
+            query["brand_model"] = brand_match
+        location_match = text_match(survey_location)
+        if location_match is not None:
+            query["survey_location"] = location_match
 
         if date_from or date_to:
             date_filter = {}
@@ -112,12 +118,15 @@ class ResponseController:
             file_ids = [PydanticObjectId(file_id)]
         elif region_id or country_id or ib_version_id:
             file_query = {}
-            if region_id:
-                file_query["region_id"] = PydanticObjectId(region_id)
-            if country_id:
-                file_query["country_id"] = PydanticObjectId(country_id)
-            if ib_version_id:
-                file_query["ib_version_id"] = PydanticObjectId(ib_version_id)
+            r_match = id_match(region_id)
+            if r_match is not None:
+                file_query["region_id"] = r_match
+            c_match = id_match(country_id)
+            if c_match is not None:
+                file_query["country_id"] = c_match
+            ib_match = id_match(ib_version_id)
+            if ib_match is not None:
+                file_query["ib_version_id"] = ib_match
             files = await UploadedFile.find({**file_query, "status": "completed"}).to_list()
             file_ids = [f.id for f in files]
 
