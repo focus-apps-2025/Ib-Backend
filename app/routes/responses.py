@@ -278,7 +278,9 @@ async def export_csv(
     brand_model: Optional[str] = None,
     scoped_user: ScopedUser = Depends(get_scoped_user),
 ):
-    """Export filtered responses as CSV."""
+    """Export filtered responses as CSV with proper column headers and alignment."""
+    from app.utils.column_mapping import get_all_column_headers
+
     query = {}
     if file_id:
         query["file_id"] = PydanticObjectId(file_id)
@@ -288,27 +290,63 @@ async def export_csv(
     query = scoped_user.apply_to_query(query)
     responses = await SurveyResponse.find(query).limit(100000).to_list()
 
+    # ── Build the FIXED, ordered letter list A..QI (never based on data) ──
+    COLUMN_HEADERS = get_all_column_headers()   # {'A': 'Timestamp', 'B': '...', ...}
+
+    def excel_letter_to_num(letter: str) -> int:
+        """A → 1, Z → 26, AA → 27, QI → 425"""
+        n = 0
+        for ch in letter.upper():
+            n = n * 26 + (ord(ch) - ord('A') + 1)
+        return n
+
+    def num_to_excel_letter(n: int) -> str:
+        """1 → A, 26 → Z, 27 → AA"""
+        s = ""
+        while n > 0:
+            n, rem = divmod(n - 1, 26)
+            s = chr(65 + rem) + s
+        return s
+
+    # Take the highest letter present in the mapping; fall back to 'QI'
+    if COLUMN_HEADERS:
+        max_num = max(excel_letter_to_num(k) for k in COLUMN_HEADERS.keys())
+    else:
+        max_num = excel_letter_to_num("QI")
+
+    all_letters = [num_to_excel_letter(i) for i in range(1, max_num + 1)]
+
+    # Friendly header row (falls back to the letter if mapping is incomplete)
+    header_labels = [COLUMN_HEADERS.get(L, f"Column {L}") for L in all_letters]
+
+    # Meta columns first (matching your frontend grid layout)
+    meta_headers = ["id", "survey_date", "brand_model", "location", "nps_score"]
+
     async def generate():
         output = io.StringIO()
-        writer = csv.writer(output)
+        writer = csv.writer(output, quoting=csv.QUOTE_MINIMAL)
 
-        # Collect all column keys
-        all_keys = set()
-        for r in responses:
-            all_keys.update(r.full_data.keys())
-        sorted_keys = sorted(all_keys)
+        # UTF-8 BOM so Excel renders ₹, –, “ ” correctly
+        yield "\ufeff"
 
-        writer.writerow(["id", "survey_date", "brand_model", "location", "nps_score"] + sorted_keys)
+        # ── Header row ──
+        writer.writerow(meta_headers + header_labels)
         output.seek(0)
         yield output.read()
         output.truncate(0)
         output.seek(0)
 
+        # ── Data rows — ALWAYS in the same letter order, blanks preserved ──
         for r in responses:
+            full = r.full_data or {}
             row = [
-                str(r.id), r.survey_date, r.brand_model,
-                r.survey_location, r.nps_score,
-            ] + [r.full_data.get(k, "") for k in sorted_keys]
+                str(r.id),
+                r.survey_date.isoformat() if r.survey_date else "",
+                r.brand_model or "",
+                r.survey_location or "",
+                r.nps_score if r.nps_score is not None else "",
+            ] + [full.get(L, "") for L in all_letters]
+
             writer.writerow(row)
             output.seek(0)
             yield output.read()
@@ -317,6 +355,6 @@ async def export_csv(
 
     return StreamingResponse(
         generate(),
-        media_type="text/csv",
+        media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": "attachment; filename=survey_responses.csv"},
     )

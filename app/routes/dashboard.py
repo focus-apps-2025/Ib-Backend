@@ -3302,6 +3302,18 @@ async def get_service_cps(
         }
     ]
     results = await SurveyResponse.aggregate(pipeline).to_list(length=None)
+    # ─── NEW: helper to fetch + trim the DB question text per column ───
+    from app.utils.column_mapping import COLUMN_HEADERS_MAP
+
+    def _question_for_column(col_letter: str, fallback: str) -> str:
+        """Return the DB question text for a column, truncated at the first '?'
+        so we drop any long parenthetical instructions."""
+        raw = COLUMN_HEADERS_MAP.get(col_letter, "") or fallback
+        raw = str(raw).strip()
+        q_idx = raw.find("?")
+        if q_idx != -1:
+            return raw[: q_idx + 1].strip()
+        return raw[:200].strip()
     
     def clean_val(v):
         if not v:
@@ -3343,6 +3355,37 @@ async def get_service_cps(
     return {
         "overall": overall,
         "brand_breakdown": brand_breakdown,
-        "sample_size": len(results)
+        "sample_size": len(results),
+        "questions": {
+            "pk": _question_for_column("PM", "Recommend TVS Genuine Spare Parts"),
+            "po": _question_for_column("PQ", "Availability of TVS Genuine Spare Parts"),
+            "ps": _question_for_column("PU", "Quality of TVS Genuine Spare Parts"),
+            "pw": _question_for_column("PY", "Value for Money of TVS Genuine Spare Parts"),
+        },
     }
 
+@router.get("/cps-questions")
+async def get_cps_questions():
+    """
+    Return the actual CPS question texts pulled from the column-headers JSON,
+    truncated at the first '?' so titles stay short.
+    """
+    from app.utils.column_mapping import get_question_text_for_column
+
+    def extract_question(col: str) -> str:
+        raw = get_question_text_for_column(col) or ""
+        qmark = raw.find("?")
+        text = raw[: qmark + 1] if qmark != -1 else raw
+        # strip leading "C1. " / "C2. " prefix
+        import re
+        text = re.sub(r'^\s*C\d+\.\s*', '', text).strip()
+        return text
+
+    return {
+        "data": [
+            {"code": "C1 (PK)", "column": "PM", "question": extract_question("PM")},
+            {"code": "C2 (PO)", "column": "PO", "question": extract_question("PO")},
+            {"code": "C3 (PS)", "column": "PU", "question": extract_question("PU")},
+            {"code": "C4 (PW)", "column": "PY", "question": extract_question("PY")},
+        ]
+    }

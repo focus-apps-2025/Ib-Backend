@@ -63,7 +63,7 @@ ISSUE_COLUMN_RANGE_MAPPING = {
     "Vehicle Pulling problem":     {"start": "OC", "end": "OD", "count": 2},
     "Roof top (soft top) issue":   {"start": "OE", "end": "OG", "count": 3},
     "Wiper problem":               {"start": "OH", "end": "OI", "count": 2},
-    "Fastener issue":              {"start": "OJ", "end": "OJ", "count": 1},
+    "Faster issue":                {"start": "OJ", "end": "OJ", "count": 1},
 }
 
 # All 33 issues

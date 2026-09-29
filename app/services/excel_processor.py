@@ -173,7 +173,7 @@ def is_junk_value(val: Any) -> bool:
     return any(re.match(p, s, re.IGNORECASE) for p in patterns)
 
 
-async def extract_row_data(row: pd.Series, col_letters: List[str]) -> Dict[str, Any]:
+def extract_row_data(row: pd.Series, col_letters: List[str],issue_mapping: dict) -> Dict[str, Any]:    
     """
     Extract a single row into:
     - key_fields: indexed fields for fast filtering
@@ -243,7 +243,6 @@ async def extract_row_data(row: pd.Series, col_letters: List[str]) -> Dict[str, 
     # ============================================================
     # Complaint data (EL to OD) - grouped by issue from DB
     # ============================================================
-    issue_mapping = await get_issue_column_range_mapping()  # from DB
     complaint_data = {}
     for issue_name, range_info in issue_mapping.items():
         start_idx = col_letter_to_index(range_info["start"])
@@ -273,16 +272,13 @@ async def extract_row_data(row: pd.Series, col_letters: List[str]) -> Dict[str, 
         "passive_data": passive_data,
     }
 
-async def compute_issue_analysis(
-    responses: List[Dict[str, Any]], col_letters: List[str]
-) -> List[Dict[str, Any]]:
+def compute_issue_analysis(responses: List[Dict[str, Any]],col_letters: List[str],issue_mapping: dict,) -> List[Dict[str, Any]]:
     """
     Compute per-issue, per-follow-up answer counts from a list of response dicts.
     Returns list of issue summary dicts for IssueAnalysis model.
     """
     from collections import Counter, defaultdict
 
-    issue_mapping = await get_issue_column_range_mapping()
 
     issue_summaries = []
     total_issue_count = sum(len(r.get("complaint_groups", [])) for r in responses)

@@ -1,6 +1,7 @@
 """
 Issue controller - Business logic for issue analysis.
 """
+import re
 from typing import Dict, Any, Optional, List
 from beanie import PydanticObjectId
 from fastapi import HTTPException
@@ -135,12 +136,97 @@ class IssueController:
             # Seat issue: OA + OB → single "Seat issue" entry
             "OA": ("Seat issue", ""),
             "OB": ("Seat issue", ""),
+
+            # ─── Suspension issue (IJ → JD): merge 21 columns into 7 sub-issues ───
+            # Front Suspension Noise: IJ, IK, IL, IM
+            "IJ": ("Front Suspension Noise", ""),
+            "IK": ("Front Suspension Noise", ""),
+            "IL": ("Front Suspension Noise", ""),
+            "IM": ("Front Suspension Noise", ""),
+
+            # Oil leak from front suspension: IN (standalone)
+            "IN": ("Oil leak from front suspension", ""),
+
+            # Front suspension Hard: IO, IP, IQ
+            "IO": ("Front suspension Hard", ""),
+            "IP": ("Front suspension Hard", ""),
+            "IQ": ("Front suspension Hard", ""),
+
+            # Front Suspension Soft: IR, IS, IT
+            "IR": ("Front Suspension Soft", ""),
+            "IS": ("Front Suspension Soft", ""),
+            "IT": ("Front Suspension Soft", ""),
+
+            # Rear Suspension Hard: IU, IV, IW
+            "IU": ("Rear Suspension Hard", ""),
+            "IV": ("Rear Suspension Hard", ""),
+            "IW": ("Rear Suspension Hard", ""),
+
+            # Rear suspension soft: IX, IY, IZ
+            "IX": ("Rear suspension soft", ""),
+            "IY": ("Rear suspension soft", ""),
+            "IZ": ("Rear suspension soft", ""),
+
+            # Rear suspension Noise: JA, JB, JC, JD
+            "JA": ("Rear suspension Noise", ""),
+            "JB": ("Rear suspension Noise", ""),
+            "JC": ("Rear suspension Noise", ""),
+            "JD": ("Rear suspension Noise", ""),
         }
 
-        # Which columns belong to the same merged sub-issue (so we only count once per respondent)
         MERGED_COLUMN_GROUPS = [
-            {"OA", "OB"},   # Seat issue
+            {"OA", "OB"},                     # Seat issue
         ]
+
+        COLUMN_SHORT_LABELS = {
+            # Battery
+            "MH": "Battery drain quickly",
+            "MI": "Battery life is less",
+            "MJ": "Battery out of warranty",
+            # Running off
+            "NC": "Slow speed (less than 30 kmph)",
+            "ND": "High speed (more than 50 kmph)",
+            "NE": "During idle condition",
+            "NF": "While Crossing speed breaker",
+            "NG": "While De-acceleration",
+            "NH": "While applying brake",
+            "NI": "While applying clutch",
+        }
+
+                # ─── Columns whose raw cell values should be collected as
+        #     "answer_values" for the PPT answer-wise slides ───
+        ANSWER_VALUE_ISSUES = {
+            # issue_name : [list of columns to collect answers from]
+            "Jerking issues":              ["ML", "MM"],
+            "Low Speed":                   ["HY"],
+            "Low speed":                   ["HY"],
+            "Throttle / Accelerator issue": ["NJ"],
+            "Seat issue":                  ["OA", "OB"],
+            "Vehicle Pulling problem":     ["OC", "OD"],
+            "Low Mileage":                 ["HT"],
+            "Kicker issues":               ["HR", "HS"],
+            "Wiper problem":               ["OH", "OI"],
+            "Roof top (soft top) issue":   ["OE"],
+            "Faster issue":                ["OJ"],
+            "Chain issue":                 ["FE"],
+            "Chain case issue":            ["FF"],
+            "Battery issues":              ["MH", "MI", "MJ"],
+            "Running off":                 ["NC", "ND", "NE", "NF", "NG", "NH", "NI"],
+        }
+        def _normalize_issue_key(name: str) -> str:
+            """Lowercase + strip trailing 'issue(s)' + collapse whitespace +
+            remove spaces around slashes. Used to match the frontend config
+            regardless of formatting differences."""
+            s = str(name or '').strip().lower()
+            s = s.replace(' /', '/').replace('/ ', '/')   # tighten slashes
+            s = re.sub(r'\s+', ' ', s)                    # collapse whitespace
+            s = re.sub(r'\s*issues?$', '', s)             # strip trailing issue(s)
+            return s.strip()
+
+        # Pre-normalize the keys once so lookups are O(1)
+        ANSWER_VALUE_ISSUES_NORM = {
+            _normalize_issue_key(k): v for k, v in ANSWER_VALUE_ISSUES.items()
+        }
 
         from app.services.excel_processor import is_junk_value
 
@@ -254,13 +340,15 @@ class IssueController:
                     if not is_valid_complaint(val):
                         continue
 
-                    # ── Apply column override / merge logic ──
+                        # ── Apply column override / merge logic ──
                     if col_letter in COLUMN_SUBISSUE_OVERRIDES:
                         sub_issue, follow_up = COLUMN_SUBISSUE_OVERRIDES[col_letter]
+                    elif col_letter in COLUMN_SHORT_LABELS:
+                        sub_issue = COLUMN_SHORT_LABELS[col_letter]
+                        follow_up = ""
                     else:
                         question_text = get_question_text_for_column(col_letter)
                         sub_issue, follow_up = parse_column_name(question_text)
-
                     # If this column belongs to a merged group, only count the group once per respondent
                     merged_group_key = None
                     for grp in MERGED_COLUMN_GROUPS:
@@ -286,8 +374,46 @@ class IssueController:
                         if follow_up not in sub_issue_data[sub_issue]["follow_ups"]:
                             sub_issue_data[sub_issue]["follow_ups"][follow_up] = {}
                         sub_issue_data[sub_issue]["follow_ups"][follow_up][brand_name] = sub_issue_data[sub_issue]["follow_ups"][follow_up].get(brand_name, 0) + 1
+                        # ─── Build answer_values for the PPT answer-wise slides ───
+            # Collected per-issue, across the configured columns.
+            answer_values_for_issue: Dict[str, Dict[str, Any]] = {}
+            cols_for_answers = ANSWER_VALUE_ISSUES_NORM.get(_normalize_issue_key(iname))
+
+            if cols_for_answers:
+                for r in responses:
+                    brand_name = clean_brand_name(r.brand_model)
+                    full_data = r.full_data or {}
+                    for col_letter in cols_for_answers:
+                        val = full_data.get(col_letter, "")
+                        if not is_valid_complaint(val):
+                            continue
+                        # Normalize: trim + collapse internal whitespace
+                        answer_key = str(val).strip()
+                        answer_key = " ".join(answer_key.split())
+                        if not answer_key:
+                            continue
+
+                        # Merge case-insensitively onto the first-seen display form
+                        existing_key = None
+                        for k in answer_values_for_issue.keys():
+                            if k.lower() == answer_key.lower():
+                                existing_key = k
+                                break
+                        if existing_key:
+                            answer_key = existing_key
+
+                        if answer_key not in answer_values_for_issue:
+                            answer_values_for_issue[answer_key] = {
+                                "brands": {},
+                                "total": 0,
+                            }
+                        answer_values_for_issue[answer_key]["brands"][brand_name] = (
+                            answer_values_for_issue[answer_key]["brands"].get(brand_name, 0) + 1
+                        )
+                        answer_values_for_issue[answer_key]["total"] += 1
 
             sub_issues_list = []
+            answers_attached = False 
             for sub_issue_name, sub_data in sub_issue_data.items():
                 # Build brands list dynamically
                 brands_list = []
@@ -326,7 +452,7 @@ class IssueController:
                                 # Check if this is the current follow-up
                                 if sub_issue_check == sub_issue_name and follow_up_check == fu_name:
                                     # Get the answer value from the column
-                                    import re
+
                                     answer_value = str(val).strip()
                                     
                                     # Normalize spaces around hyphens and fix known typos
@@ -415,18 +541,67 @@ class IssueController:
                         "answers": answers_list
                     })
                 
+                               # Determine whether to attach answer_values to this sub-issue.
+                # Attach on:
+                #   - merged issues (Seat / Jerking / etc.): the single sub-issue
+                #   - single-column issues: the one sub-issue built from that column
+                #   - per-column issues (Battery / Running off): attach to every sub-issue
+               # NEW
+                attach_answers = False
+                _norm = _normalize_issue_key(iname)
+                if _norm in ANSWER_VALUE_ISSUES_NORM:
+                    _cols = ANSWER_VALUE_ISSUES_NORM[_norm]
+                    if len(sub_issue_data) == 1:
+                        attach_answers = True
+                    elif len(_cols) == 1 and not answers_attached:
+                        # Single-column issue (e.g. Faster issue -> OJ): attach once,
+                        # so answers are never duplicated or double-counted
+                        attach_answers = True
+                        answers_attached = True
+                
                 sub_issues_list.append({
                     "sub_issue": sub_issue_name,
                     "total": sub_total,
                     "brands": brands_list,
                     "has_follow_ups": sub_data["has_follow_ups"],
-                    "follow_ups": follow_ups_list
+                    "follow_ups": follow_ups_list,
+                    **({"answer_values": answer_values_for_issue} if attach_answers else {}),
                 })
-
             # Sort sub-issues by total complaints descending
             if sub_issues_list:
                 sub_issues_list = sorted(sub_issues_list, key=lambda x: -x["total"])
-                
+                        # ─── Per-column answer_values for Battery / Running off style issues ───
+            if (_normalize_issue_key(iname) in ANSWER_VALUE_ISSUES_NORM and len(sub_issue_data) > 1 and len(ANSWER_VALUE_ISSUES_NORM[_normalize_issue_key(iname)]) > 1):
+                cols_for_per_col = ANSWER_VALUE_ISSUES_NORM.get(_normalize_issue_key(iname)) or []
+
+                for sub in sub_issues_list:
+                    # Find the column whose parsed sub_issue matches this sub
+                    for r in issue_responses:
+                        brand_name = clean_brand_name(r.brand_model)
+                        full_data = r.full_data or {}
+                        for col_letter in cols_for_per_col:
+                            qtext = get_question_text_for_column(col_letter)
+                            parsed_main, _ = parse_column_name(qtext)
+                            if parsed_main != sub["sub_issue"]:
+                                continue
+                            val = full_data.get(col_letter, "")
+                            if not is_valid_complaint(val):
+                                continue
+                            answer_key = " ".join(str(val).strip().split())
+                            if not answer_key:
+                                continue
+
+                            sub.setdefault("answer_values", {})
+                            for k in list(sub["answer_values"].keys()):
+                                if k.lower() == answer_key.lower():
+                                    answer_key = k
+                                    break
+                            if answer_key not in sub["answer_values"]:
+                                sub["answer_values"][answer_key] = {"brands": {}, "total": 0}
+                            sub["answer_values"][answer_key]["brands"][brand_name] = (
+                                sub["answer_values"][answer_key]["brands"].get(brand_name, 0) + 1
+                            )
+                            sub["answer_values"][answer_key]["total"] += 1
             result.append({
                 "issue_name": iname,
                 "total_complaints": total_complaints_by_issue[iname],
