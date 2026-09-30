@@ -132,6 +132,20 @@ class IssueController:
             return {"data": [], "summary": {}, "message": "No analysis data found"}
 
         issue_mapping = await get_issue_column_range_mapping()
+        # ─── Runtime range overrides ───
+        # Shrink an issue's column range without touching column_mapping.py
+        # or the DB. Keyed by issue_name → (start_col, end_col).
+        RANGE_OVERRIDES = {
+            "Pick-up problem": ("MR", "MV"),   # only the speed-bracket columns
+        }
+        for _name, (_start, _end) in RANGE_OVERRIDES.items():
+            if _name in issue_mapping:
+                issue_mapping[_name] = {
+                    **issue_mapping[_name],
+                    "start": _start,
+                    "end": _end,
+                    "count": col_letter_to_index(_end) - col_letter_to_index(_start) + 1,
+                }
         COLUMN_SUBISSUE_OVERRIDES = {
             # Seat issue: OA + OB → single "Seat issue" entry
             "OA": ("Seat issue", ""),
@@ -172,6 +186,82 @@ class IssueController:
             "JB": ("Rear suspension Noise", ""),
             "JC": ("Rear suspension Noise", ""),
             "JD": ("Rear suspension Noise", ""),
+            # Pickup-problem
+            "MR": ("less than 20km",   ""),
+            "MS": ("20 to 40km",       ""),
+            "MT": ("40 to 60km",       ""),
+            "MU": ("60 to 80km",       ""),
+            "MV": ("more than 80kmph", ""),
+
+                        # ─── Wheel/Tyre issues (KT → MG): merge into 14 sub-issues ───
+
+            # Front Wheel Noise: KT, KU, KV
+            "KT": ("Front Wheel Noise", ""),
+            "KU": ("Front Wheel Noise", ""),
+            "KV": ("Front Wheel Noise", ""),
+
+            # Front Wheel Wobbling: KW, KX, KY, KZ
+            "KW": ("Front Wheel Wobbling", ""),
+            "KX": ("Front Wheel Wobbling", ""),
+            "KY": ("Front Wheel Wobbling", ""),
+            "KZ": ("Front Wheel Wobbling", ""),
+
+            # Front Tyre Skidding: LA, LB, LC
+            "LA": ("Front Tyre Skidding", ""),
+            "LB": ("Front Tyre Skidding", ""),
+            "LC": ("Front Tyre Skidding", ""),
+
+            # Front Wheel Skidding: LD (standalone)
+            "LD": ("Front Wheel Skidding", ""),
+
+            # Front Tyre Weak / Less Life: LE..LK
+            "LE": ("Front Tyre Weak/Less Life", ""),
+            "LF": ("Front Tyre Weak/Less Life", ""),
+            "LG": ("Front Tyre Weak/Less Life", ""),
+            "LH": ("Front Tyre Weak/Less Life", ""),
+            "LI": ("Front Tyre Weak/Less Life", ""),
+            "LJ": ("Front Tyre Weak/Less Life", ""),
+            "LK": ("Front Tyre Weak/Less Life", ""),
+
+            # Front Wheel Tight: LL
+            "LL": ("Front Wheel Tight", ""),
+
+            # Front Widder Tyre Required: LM
+            "LM": ("Front Widder Tyre Required", ""),
+
+            # Rear Wheel Noise: LN, LO, LP
+            "LN": ("Rear Wheel Noise", ""),
+            "LO": ("Rear Wheel Noise", ""),
+            "LP": ("Rear Wheel Noise", ""),
+
+            # Rear Wheel Wobbling: LQ..LT
+            "LQ": ("Rear Wheel Wobbling", ""),
+            "LR": ("Rear Wheel Wobbling", ""),
+            "LS": ("Rear Wheel Wobbling", ""),
+            "LT": ("Rear Wheel Wobbling", ""),
+
+            # Rear Tyre Skidding: LU, LV, LW
+            "LU": ("Rear Tyre Skidding", ""),
+            "LV": ("Rear Tyre Skidding", ""),
+            "LW": ("Rear Tyre Skidding", ""),
+
+            # Rear Wheel Skidding: LX (standalone)
+            "LX": ("Rear Wheel Skidding", ""),
+
+            # Rear Tyre Weak / Less Life: LY..ME
+            "LY": ("Rear Tyre Weak/Less Life", ""),
+            "LZ": ("Rear Tyre Weak/Less Life", ""),
+            "MA": ("Rear Tyre Weak/Less Life", ""),
+            "MB": ("Rear Tyre Weak/Less Life", ""),
+            "MC": ("Rear Tyre Weak/Less Life", ""),
+            "MD": ("Rear Tyre Weak/Less Life", ""),
+            "ME": ("Rear Tyre Weak/Less Life", ""),
+
+            # Rear Wheel Tight: MF
+            "MF": ("Rear Wheel Tight", ""),
+
+            # Rear Widder Tyre Required: MG
+            "MG": ("Rear Widder Tyre Required", ""),
         }
 
         MERGED_COLUMN_GROUPS = [
