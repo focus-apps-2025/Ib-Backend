@@ -302,6 +302,7 @@ class IssueController:
             "Chain case issue":            ["FF"],
             "Battery issues":              ["MH", "MI", "MJ"],
             "Running off":                 ["NC", "ND", "NE", "NF", "NG", "NH", "NI"],
+            "Part not available":          ["MP", "MQ"]
         }
         def _normalize_issue_key(name: str) -> str:
             """Lowercase + strip trailing 'issue(s)' + collapse whitespace +
