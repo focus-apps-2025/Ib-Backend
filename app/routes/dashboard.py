@@ -1305,6 +1305,8 @@ async def get_service_benefits_betterments(
         "pgm": init_section(),
     }
 
+    col_hdr_prefix = {col: COLUMN_HEADERS_MAP.get(col, "")[:25] for col in oi_ou_cols + ov_pj_cols if COLUMN_HEADERS_MAP.get(col, "")}
+
     for r in results:
         b = clean_brand_name(r.get("brand"))
         w_type = parse_workshop(r.get("workshop_val"))
@@ -1327,14 +1329,18 @@ async def get_service_benefits_betterments(
             topic = benefit_topics.get(col, COLUMN_HEADERS_MAP.get(col, col))
             if topic in counted_benefit_topics:
                 continue  # already counted this topic for this respondent
-            val = fd.get(col) or fd.get(COLUMN_HEADERS_MAP.get(col, ""))
-            if not val:
+            val = fd.get(col)
+            if val is None:
                 hdr = COLUMN_HEADERS_MAP.get(col, "")
-                if hdr:
-                    for k, v in fd.items():
-                        if hdr[:25] in k:
-                            val = v
-                            break
+                if hdr and hdr in fd:
+                    val = fd.get(hdr)
+                elif hdr:
+                    hdr_pref = col_hdr_prefix.get(col)
+                    if hdr_pref:
+                        for k, v in fd.items():
+                            if v is not None and hdr_pref in k:
+                                val = v
+                                break
             if val and str(val).strip() and str(val).strip().lower() not in ("nan", "none", "0", "false", "no", "-"):
                 val_str = str(val).strip()
                 counted_benefit_topics.add(topic)
@@ -1352,14 +1358,18 @@ async def get_service_benefits_betterments(
             topic = issue_topics.get(col, COLUMN_HEADERS_MAP.get(col, col))
             if topic in counted_issue_topics:
                 continue  # already counted this topic for this respondent
-            val = fd.get(col) or fd.get(COLUMN_HEADERS_MAP.get(col, ""))
-            if not val:
+            val = fd.get(col)
+            if val is None:
                 hdr = COLUMN_HEADERS_MAP.get(col, "")
-                if hdr:
-                    for k, v in fd.items():
-                        if hdr[:25] in k:
-                            val = v
-                            break
+                if hdr and hdr in fd:
+                    val = fd.get(hdr)
+                elif hdr:
+                    hdr_pref = col_hdr_prefix.get(col)
+                    if hdr_pref:
+                        for k, v in fd.items():
+                            if v is not None and hdr_pref in k:
+                                val = v
+                                break
             if val and str(val).strip() and str(val).strip().lower() not in ("nan", "none", "0", "false", "no", "-"):
                 val_str = str(val).strip()
                 counted_issue_topics.add(topic)
@@ -2862,19 +2872,19 @@ async def get_service_satisfaction(
         "10": {"col": "CT", "question": "10. Delivery as per promised time", "prefix": "10."},
     }
 
-    def extract_val(fd: dict, col: str, prefix: str) -> Any:
+    def extract_val(fd: dict, norm_fd: dict, col: str, prefix: str) -> Any:
         if not isinstance(fd, dict):
             return None
         if col in fd and fd[col] is not None:
             return fd[col]
-        for k, v in fd.items():
-            if not k:
-                continue
-            k_str = str(k).strip().lower()
-            p_str = prefix.lower()
-            if k_str == col.lower() or k_str.startswith(p_str) or k_str.startswith(f"a{p_str}"):
-                if v is not None:
-                    return v
+        col_l = col.lower()
+        if col_l in norm_fd:
+            return norm_fd[col_l]
+        p_str = prefix.lower()
+        ap_str = f"a{p_str}"
+        for k_str, v in norm_fd.items():
+            if k_str.startswith(p_str) or k_str.startswith(ap_str):
+                return v
         return None
 
     brand_base_counts = defaultdict(int)
@@ -2887,18 +2897,19 @@ async def get_service_satisfaction(
 
         b = clean_brand_name(r.get("brand"))
         fd = r.get("full_data") or {}
+        norm_fd = {str(k).strip().lower(): v for k, v in fd.items() if k and v is not None} if isinstance(fd, dict) else {}
 
         brand_base_counts[b] += 1
 
         for m in metric_defs:
-            v = extract_val(fd, m["col"], m["prefix"])
+            v = extract_val(fd, norm_fd, m["col"], m["prefix"])
             yn = parse_yes_no(v)
             if yn:
                 metric_counts[m["key"]][b]["filled"] += 1
                 metric_counts[m["key"]][b][yn] += 1
 
         for s_key, s_def in section_defs.items():
-            v = extract_val(fd, s_def["col"], s_def["prefix"])
+            v = extract_val(fd, norm_fd, s_def["col"], s_def["prefix"])
             yn = parse_yes_no(v)
             if yn:
                 section_counts[s_key][b]["filled"] += 1

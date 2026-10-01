@@ -11,6 +11,7 @@ from app.middleware.scope import ScopedUser, get_scoped_user
 from app.utils.column_mapping import ISSUE_COLUMN_RANGE_MAPPING, get_question_text_for_column
 
 from app.controllers.issue_controller import IssueController
+from app.controllers.l3_l4_controller import L3L4Controller
 
 router = APIRouter(prefix="/issues", tags=["Issues Analysis"])
 
@@ -53,6 +54,38 @@ async def get_issue_analysis(
     )
 
 
+@router.get("/l3l4")
+async def get_l3_l4(
+    file_id: Optional[str] = None,
+    region_id: Optional[str] = None,
+    country_id: Optional[str] = None,
+    ib_version_id: Optional[str] = None,
+    issue_name: Optional[str] = None,
+    brand_model: Optional[str] = None,
+    survey_location: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    search: Optional[str] = None,
+    scoped_user: ScopedUser = Depends(get_scoped_user),
+):
+    """
+    Get L3/L4 issue analysis for PPT export.
+    """
+    return await L3L4Controller.get_l3_l4(
+        file_id=file_id,
+        region_id=region_id,
+        country_id=country_id,
+        ib_version_id=ib_version_id,
+        issue_name=issue_name,
+        brand_model=brand_model,
+        survey_location=survey_location,
+        date_from=date_from,
+        date_to=date_to,
+        search=search,
+        scoped_user=scoped_user,
+    )
+
+
 @router.get("/top")
 async def get_top_issues(
     limit: int = Query(10, ge=1, le=33),
@@ -76,3 +109,4 @@ async def get_issue_trend(
         file_id=file_id,
         scoped_user=scoped_user,
     )
+
