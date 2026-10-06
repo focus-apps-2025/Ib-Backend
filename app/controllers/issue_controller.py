@@ -136,7 +136,8 @@ class IssueController:
         # Shrink an issue's column range without touching column_mapping.py
         # or the DB. Keyed by issue_name → (start_col, end_col).
         RANGE_OVERRIDES = {
-            "Pick-up problem": ("MR", "MV"),   # only the speed-bracket columns
+            "Pick-up problem": ("MR", "MV"), 
+            "Battery issues": ("MH", "MJ"),  # only the speed-bracket columns
         }
         for _name, (_start, _end) in RANGE_OVERRIDES.items():
             if _name in issue_mapping:
@@ -262,6 +263,44 @@ class IssueController:
 
             # Rear Widder Tyre Required: MG
             "MG": ("Rear Widder Tyre Required", ""),
+
+                        # ─── Vibration (JX → KN): use bracket content as sub-issue label ───
+            # KE and KK are excluded via SKIP_COLUMNS.
+            "JX": ("Wisor Vibration", ""),
+            "JY": ("Foot rest vibration", ""),
+            "JZ": ("Handle bar", ""),
+            "KA": ("Speedometer", ""),
+            "KB": ("Juddering", ""),
+            "KC": ("Seat vibration", ""),
+            "KD": ("Tank vibration", ""),
+            "KF": ("Clutch vibration", ""),
+            "KG": ("pillion handle vibration", ""),
+            "KH": ("Muffler vibration", ""),
+            "KI": ("Saree guard vibration", ""),
+            "KJ": ("Seat vibration", ""),
+            "KL": ("LH side", ""),
+            "KM": ("RH side", ""),
+            "KN": ("Both side", ""),
+
+            # ─── Vehicle noise (JE → JW): use bracket content as sub-issue label ───
+            # JN and JW are excluded via SKIP_COLUMNS.
+            "JE": ("Meter noise", ""),
+            "JF": ("Front mudguard", ""),
+            "JG": ("Front panel noise", ""),
+            "JH": ("Wisor noise", ""),
+            "JI": ("Headlamp rattling noise", ""),
+            "JJ": ("Floor board", ""),
+            "JK": ("Lockset noise", ""),
+            "JL": ("Petrol cap noise", ""),
+            "JM": ("Customer unable to say", ""),
+            "JO": ("Kicker noise", ""),
+            "JP": ("Rear mudguard", ""),
+            "JQ": ("Accessories noise", ""),
+            "JR": ("Rear panel noise", ""),
+            "JS": ("Seat noise", ""),
+            "JT": ("Muffler noise", ""),
+            "JU": ("gear box", ""),
+            "JV": ("Customer unable to say", ""),
         }
 
         MERGED_COLUMN_GROUPS = [
@@ -304,6 +343,7 @@ class IssueController:
             "Running off":                 ["NC", "ND", "NE", "NF", "NG", "NH", "NI"],
             "Part not available":          ["MP", "MQ"]
         }
+        SKIP_COLUMNS = {"KE", "KK", "JN", "JW"}
         def _normalize_issue_key(name: str) -> str:
             """Lowercase + strip trailing 'issue(s)' + collapse whitespace +
             remove spaces around slashes. Used to match the frontend config
@@ -344,6 +384,10 @@ class IssueController:
                     end_idx = col_letter_to_index(end_col)
                     for col_idx in range(start_idx, end_idx + 1):
                         col_letter = index_to_col_letter(col_idx)
+
+                        if col_letter in SKIP_COLUMNS:
+                            continue  # skip these specific columns
+
                         val = (r.full_data or {}).get(col_letter, "")
                         if is_valid_complaint(val):
                             cg.add(iname)
@@ -428,6 +472,9 @@ class IssueController:
                 for col_idx in range(start_idx, end_idx + 1):
                     col_letter = index_to_col_letter(col_idx)
                     val = full_data.get(col_letter, "")
+                    if col_letter in SKIP_COLUMNS:
+                        continue
+
                     if not is_valid_complaint(val):
                         continue
 

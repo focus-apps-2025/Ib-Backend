@@ -161,8 +161,8 @@ def is_junk_value(val: Any) -> bool:
 
     # 4. Regex patterns for submit form, single/double letters, dots/dashes
     patterns = [
-        r"^Submit\s?Form",
-        r"^Submit$",
+        r"^submit\s*(the)?\s*form",        # "Submit Form" / "Submit the form" / "Submit theform"
+        r"^submit$",
         r"^\.+$",
         r"^[-_]+$",
         r"^[A-Za-z]{1,2}$",
@@ -170,7 +170,19 @@ def is_junk_value(val: Any) -> bool:
         r"^[A-Z]{1,3}\.?$",
         r"^\s*$",
     ]
-    return any(re.match(p, s, re.IGNORECASE) for p in patterns)
+    if any(re.match(p, s, re.IGNORECASE) for p in patterns):
+        return True
+
+    # 5. Catch any "submit the form" phrasing anywhere in the string
+    #    (handles trailing dots, prefixes like "Please", etc.)
+    if re.search(r"submit\s+the?\s*form", s_lower):
+        return True
+
+    # 6. Catch long dotted placeholder strings (e.g. ".........." repeated)
+    if s.count(".") >= 20 and len(s) >= 30:
+        return True
+
+    return False
 
 
 def extract_row_data(row: pd.Series, col_letters: List[str],issue_mapping: dict) -> Dict[str, Any]:    
@@ -252,7 +264,12 @@ def extract_row_data(row: pd.Series, col_letters: List[str],issue_mapping: dict)
         for i in range(start_idx, end_idx + 1):
             if i < len(col_letters):
                 col = col_letters[i]
-                complaint_data[issue_key][col] = safe_str(row.get(col, ""))
+                raw = row.get(col, "")
+                # ─── FIX: mark junk as Blank ───
+                if is_junk_value(raw):
+                    complaint_data[issue_key][col] = "Blank"
+                else:
+                    complaint_data[issue_key][col] = safe_str(raw)
 
     # ============================================================
     # Passive/Good feedback (AU to BM) - grouped by topic
@@ -317,10 +334,16 @@ def compute_issue_analysis(responses: List[Dict[str, Any]],col_letters: List[str
             sub_issue_name, sub_column_name = parse_column_name(question_text)
             
             # Collect answers for this column
+                        # Collect answers for this column
             answers = []
             for r in responses:
-                val = safe_str(r.get("full_data", {}).get(col, ""))
-                answers.append(val if val else "Blank")
+                raw = r.get("full_data", {}).get(col, "")
+                # ─── FIX: drop junk / placeholder cells ───
+                if is_junk_value(raw):
+                    answers.append("Blank")
+                else:
+                    val = safe_str(raw)
+                    answers.append(val if val else "Blank")
             
             answer_counts = Counter(answers)
             total_for_col = sum(answer_counts.values())

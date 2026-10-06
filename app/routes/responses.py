@@ -24,7 +24,7 @@ router = APIRouter(prefix="/responses", tags=["Survey Responses"])
 @router.get("")
 async def get_responses(
     page: int = Query(1, ge=1),
-    page_size: int = Query(25, ge=1, le=100),
+    page_size: int = Query(25, ge=1, le=200000),
     file_id: Optional[str] = None,
     region_id: Optional[str] = None,
     country_id: Optional[str] = None,
