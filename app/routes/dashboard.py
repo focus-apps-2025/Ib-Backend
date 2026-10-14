@@ -3400,3 +3400,181 @@ async def get_cps_questions():
             {"code": "C4 (PW)", "column": "PY", "question": extract_question("PY")},
         ]
     }
+
+@router.get("/service-csi-score")
+async def get_service_csi_score(
+    file_id: Optional[str] = None,
+    region_id: Optional[str] = None,
+    country_id: Optional[str] = None,
+    ib_version_id: Optional[str] = None,
+    brand_model: Optional[str] = None,
+    survey_location: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    search: Optional[str] = None,
+    workshop: str = "authorized",          # "authorized" | "pgm" | "all"
+    scoped_user: ScopedUser = Depends(get_scoped_user),
+):
+    """
+    Brand-wise CSI from columns Y, Z, AA (0-10 rating).
+
+    - Y  = rating when answer is "No"      (0-6)
+    - Z  = rating when answer is "May be"  (7-8)
+    - AA = rating when answer is "Yes"     (9-10)
+    Exactly one of the three is filled per respondent, so the respondent's
+    score is the first valid value among Y, Z, AA.
+
+    - Only respondents whose workshop type (column BN) matches `workshop` are used.
+      Default = Authorized Workshop only.
+    - Base = number of respondents who actually have a valid rating
+      (NOT every row of that brand).
+    """
+    from app.models.survey_response import SurveyResponse
+    from app.utils.column_mapping import COLUMN_HEADERS_MAP
+    from collections import defaultdict
+    import re
+
+    CSI_COLS = ("Y", "Z", "AA")
+    MAX_SCALE = 10.0
+    JUNK = ("", "blank", "nan", "none", "null", "-", "....", "n/a", "na", "not applicable")
+
+    query = await _build_full_query(
+        file_id, region_id, country_id, ib_version_id, brand_model,
+        survey_location, date_from, date_to, search, scoped_user=scoped_user
+    )
+
+    pipeline = [
+        {"$match": query},
+        {
+            "$project": {
+                "brand": "$brand_model",
+                "workshop_val": {
+    "$ifNull": [
+        "$full_data.BN",
+        "$full_data.Q1-1 WHERE DO YOU GET YOUR VEHICLE SERVICED?",
+        "$service_workshop_type",
+    ]
+},
+                "full_data": 1,
+            }
+        },
+    ]
+    results = await SurveyResponse.aggregate(pipeline).to_list(length=None)
+
+    def norm(s) -> str:
+        return re.sub(r"[^a-z0-9]+", " ", str(s).lower()).strip()
+
+    def parse_workshop(val) -> Optional[str]:
+        if val is None:
+            return None
+        s = str(val).strip().lower()
+        if s in JUNK or re.match(r"^submit\s?form", s):
+            return None
+        if "pgm" in s or "private" in s or "garage" in s or "mechanic" in s:
+            return "pgm"
+        if "authorized" in s or "authorised" in s or "dealer" in s:
+            return "authorized"
+        return None
+
+    def parse_rating(val) -> Optional[float]:
+        if val is None or isinstance(val, bool):
+            return None
+        if isinstance(val, (int, float)):
+            num = float(val)
+            return num if 0.0 <= num <= MAX_SCALE else None
+        s = str(val).strip()
+        if s.lower() in JUNK or re.match(r"^submit\s?form", s, re.I):
+            return None
+        m = re.match(r"^\s*(\d+(?:\.\d+)?)", s)      # "9", "9.0", "9 - Excellent", "10/10"
+        if not m:
+            return None
+        num = float(m.group(1))
+        return num if 0.0 <= num <= MAX_SCALE else None
+
+    def get_col_value(fd: dict, norm_fd: dict, col: str):
+        """Strict lookup: column letter, then the FULL header text (normalised).
+        No prefix matching: Y/Z/AA headers share their first 25 chars with
+        BT/BU/BV ("Q2-3. REASON FOR RECOMMENDING ..."), so a prefix match
+        can silently read the wrong column."""
+        for key in (col, col.lower()):
+            if fd.get(key) is not None:
+                return fd[key]
+        hdr = COLUMN_HEADERS_MAP.get(col, "")
+        if hdr:
+            v = norm_fd.get(norm(hdr))
+            if v is not None:
+                return v
+        return None
+
+    def respondent_csi(fd: dict) -> Optional[float]:
+        norm_fd = {norm(k): v for k, v in fd.items() if isinstance(k, str) and v is not None}
+        for col in CSI_COLS:
+            r = parse_rating(get_col_value(fd, norm_fd, col))
+            if r is not None:
+                return r
+        return None
+
+    wanted = workshop.strip().lower()
+    scores = defaultdict(list)            # brand -> ratings
+    seg_scores = {"authorized": defaultdict(list), "pgm": defaultdict(list)}
+    included_rows = defaultdict(int)      # brand -> respondents in selected workshop type
+    skipped_no_workshop = 0
+
+    for r in results:
+        b = clean_brand_name(r.get("brand"))
+        if b == "Blank":
+            continue
+        seg = parse_workshop(r.get("workshop_val"))
+        if seg is None:
+            skipped_no_workshop += 1
+        score = respondent_csi(r.get("full_data") or {})
+
+        if score is not None and seg:
+            seg_scores[seg][b].append(score)
+
+        if wanted == "all" or seg == wanted:
+            included_rows[b] += 1
+            if score is not None:
+                scores[b].append(score)
+
+    def avg(lst):
+        return sum(lst) / len(lst) if lst else 0.0
+
+    def build_breakdown(score_map, rows_map=None):
+        out = []
+        for b in sorted(score_map.keys()):
+            s = score_map[b]
+            if not s:
+                continue
+            a = avg(s)
+            out.append({
+                "brand": b,
+                "avg_csi": round(a, 2),                    # 0-10
+                "csi_pct": round(a / MAX_SCALE * 100, 1),  # 0-100
+                "count": len(s),                           # base = scored respondents
+                "base": len(s),
+                "respondents": (rows_map or {}).get(b, len(s)),  # rows in this workshop type
+            })
+        return out
+
+    all_s = [x for lst in scores.values() for x in lst]
+    auth_s = [x for lst in seg_scores["authorized"].values() for x in lst]
+    pgm_s = [x for lst in seg_scores["pgm"].values() for x in lst]
+
+    return {
+        "workshop_filter": wanted,
+        "overall_avg_csi": round(avg(all_s), 2),
+        "overall_csi_pct": round(avg(all_s) / MAX_SCALE * 100, 1),
+        "overall_count": len(all_s),
+        "overall_base": len(all_s),
+        "authorized_avg_csi": round(avg(auth_s), 2),
+        "authorized_csi_pct": round(avg(auth_s) / MAX_SCALE * 100, 1),
+        "authorized_count": len(auth_s),
+        "pgm_avg_csi": round(avg(pgm_s), 2),
+        "pgm_csi_pct": round(avg(pgm_s) / MAX_SCALE * 100, 1),
+        "pgm_count": len(pgm_s),
+        "skipped_unknown_workshop": skipped_no_workshop,
+        "brand_breakdown": build_breakdown(scores, included_rows),
+        "authorized_brand_breakdown": build_breakdown(seg_scores["authorized"]),
+        "pgm_brand_breakdown": build_breakdown(seg_scores["pgm"]),
+    }
