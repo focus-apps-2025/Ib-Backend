@@ -1306,6 +1306,27 @@ async def get_service_benefits_betterments(
     }
 
     col_hdr_prefix = {col: COLUMN_HEADERS_MAP.get(col, "")[:25] for col in oi_ou_cols + ov_pj_cols if COLUMN_HEADERS_MAP.get(col, "")}
+    resolved_benefit_col_keys = {}
+
+    def get_benefit_col_val(fd: dict, col: str) -> Any:
+        if not fd:
+            return None
+        if col in fd:
+            return fd[col]
+        cached_k = resolved_benefit_col_keys.get(col)
+        if cached_k and cached_k in fd:
+            return fd[cached_k]
+        hdr = COLUMN_HEADERS_MAP.get(col, "")
+        if hdr and hdr in fd:
+            resolved_benefit_col_keys[col] = hdr
+            return fd[hdr]
+        hdr_pref = col_hdr_prefix.get(col)
+        if hdr_pref:
+            for k, v in fd.items():
+                if v is not None and hdr_pref in str(k):
+                    resolved_benefit_col_keys[col] = k
+                    return v
+        return None
 
     for r in results:
         b = clean_brand_name(r.get("brand"))
@@ -1329,18 +1350,7 @@ async def get_service_benefits_betterments(
             topic = benefit_topics.get(col, COLUMN_HEADERS_MAP.get(col, col))
             if topic in counted_benefit_topics:
                 continue  # already counted this topic for this respondent
-            val = fd.get(col)
-            if val is None:
-                hdr = COLUMN_HEADERS_MAP.get(col, "")
-                if hdr and hdr in fd:
-                    val = fd.get(hdr)
-                elif hdr:
-                    hdr_pref = col_hdr_prefix.get(col)
-                    if hdr_pref:
-                        for k, v in fd.items():
-                            if v is not None and hdr_pref in k:
-                                val = v
-                                break
+            val = get_benefit_col_val(fd, col)
             if val and str(val).strip() and str(val).strip().lower() not in ("nan", "none", "0", "false", "no", "-"):
                 val_str = str(val).strip()
                 counted_benefit_topics.add(topic)
@@ -1358,18 +1368,7 @@ async def get_service_benefits_betterments(
             topic = issue_topics.get(col, COLUMN_HEADERS_MAP.get(col, col))
             if topic in counted_issue_topics:
                 continue  # already counted this topic for this respondent
-            val = fd.get(col)
-            if val is None:
-                hdr = COLUMN_HEADERS_MAP.get(col, "")
-                if hdr and hdr in fd:
-                    val = fd.get(hdr)
-                elif hdr:
-                    hdr_pref = col_hdr_prefix.get(col)
-                    if hdr_pref:
-                        for k, v in fd.items():
-                            if v is not None and hdr_pref in k:
-                                val = v
-                                break
+            val = get_benefit_col_val(fd, col)
             if val and str(val).strip() and str(val).strip().lower() not in ("nan", "none", "0", "false", "no", "-"):
                 val_str = str(val).strip()
                 counted_issue_topics.add(topic)
@@ -2872,19 +2871,28 @@ async def get_service_satisfaction(
         "10": {"col": "CT", "question": "10. Delivery as per promised time", "prefix": "10."},
     }
 
-    def extract_val(fd: dict, norm_fd: dict, col: str, prefix: str) -> Any:
-        if not isinstance(fd, dict):
+    resolved_sat_keys = {}
+
+    def extract_val(fd: dict, col: str, prefix: str) -> Any:
+        if not isinstance(fd, dict) or not fd:
             return None
         if col in fd and fd[col] is not None:
             return fd[col]
+        cached_k = resolved_sat_keys.get(col)
+        if cached_k and cached_k in fd and fd[cached_k] is not None:
+            return fd[cached_k]
         col_l = col.lower()
-        if col_l in norm_fd:
-            return norm_fd[col_l]
+        if col_l in fd and fd[col_l] is not None:
+            resolved_sat_keys[col] = col_l
+            return fd[col_l]
         p_str = prefix.lower()
         ap_str = f"a{p_str}"
-        for k_str, v in norm_fd.items():
-            if k_str.startswith(p_str) or k_str.startswith(ap_str):
-                return v
+        for k, v in fd.items():
+            if v is not None:
+                k_s = str(k).strip().lower()
+                if k_s == col_l or k_s.startswith(p_str) or k_s.startswith(ap_str):
+                    resolved_sat_keys[col] = k
+                    return v
         return None
 
     brand_base_counts = defaultdict(int)
@@ -2897,19 +2905,18 @@ async def get_service_satisfaction(
 
         b = clean_brand_name(r.get("brand"))
         fd = r.get("full_data") or {}
-        norm_fd = {str(k).strip().lower(): v for k, v in fd.items() if k and v is not None} if isinstance(fd, dict) else {}
 
         brand_base_counts[b] += 1
 
         for m in metric_defs:
-            v = extract_val(fd, norm_fd, m["col"], m["prefix"])
+            v = extract_val(fd, m["col"], m["prefix"])
             yn = parse_yes_no(v)
             if yn:
                 metric_counts[m["key"]][b]["filled"] += 1
                 metric_counts[m["key"]][b][yn] += 1
 
         for s_key, s_def in section_defs.items():
-            v = extract_val(fd, norm_fd, s_def["col"], s_def["prefix"])
+            v = extract_val(fd, s_def["col"], s_def["prefix"])
             yn = parse_yes_no(v)
             if yn:
                 section_counts[s_key][b]["filled"] += 1
@@ -3491,27 +3498,34 @@ async def get_service_csi_score(
         num = float(m.group(1))
         return num if 0.0 <= num <= MAX_SCALE else None
 
-    def get_col_value(fd: dict, norm_fd: dict, col: str):
-        """Strict lookup: column letter, then the FULL header text (normalised).
-        No prefix matching: Y/Z/AA headers share their first 25 chars with
-        BT/BU/BV ("Q2-3. REASON FOR RECOMMENDING ..."), so a prefix match
-        can silently read the wrong column."""
-        for key in (col, col.lower()):
-            if fd.get(key) is not None:
-                return fd[key]
-        hdr = COLUMN_HEADERS_MAP.get(col, "")
-        if hdr:
-            v = norm_fd.get(norm(hdr))
-            if v is not None:
-                return v
-        return None
+    resolved_csi_keys = {}
+    hdr_norm_map = {col: norm(COLUMN_HEADERS_MAP.get(col, "")) for col in CSI_COLS if COLUMN_HEADERS_MAP.get(col)}
 
     def respondent_csi(fd: dict) -> Optional[float]:
-        norm_fd = {norm(k): v for k, v in fd.items() if isinstance(k, str) and v is not None}
+        if not fd:
+            return None
         for col in CSI_COLS:
-            r = parse_rating(get_col_value(fd, norm_fd, col))
-            if r is not None:
-                return r
+            for key in (col, col.lower()):
+                val = fd.get(key)
+                if val is not None:
+                    r = parse_rating(val)
+                    if r is not None:
+                        return r
+        for col in CSI_COLS:
+            cached_k = resolved_csi_keys.get(col)
+            if cached_k and cached_k in fd:
+                r = parse_rating(fd[cached_k])
+                if r is not None:
+                    return r
+        for k, v in fd.items():
+            if isinstance(k, str) and v is not None:
+                k_norm = norm(k)
+                for col, target_norm in hdr_norm_map.items():
+                    if k_norm == target_norm:
+                        resolved_csi_keys[col] = k
+                        r = parse_rating(v)
+                        if r is not None:
+                            return r
         return None
 
     wanted = workshop.strip().lower()
